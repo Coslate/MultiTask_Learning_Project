@@ -44,7 +44,7 @@ class Saver:
     def __init__(
         self,
         args,
-        ckpt_dir,
+        ckpt_file,
         best_val=0,
         condition=lambda x, y: x > y,
         save_interval=100,
@@ -53,7 +53,7 @@ class Saver:
         """
         Args:
             args (dict): dictionary with arguments.
-            ckpt_dir (str): path to directory in which to store the checkpoint.
+            ckpt_dir (str): file to directory in which to store the checkpoint.
             best_val (float or list of floats): initial best value.
             condition (function or list of functions): how to decide whether to save
                                                        the new checkpoint by comparing
@@ -62,6 +62,7 @@ class Saver:
             save_several_mode (any or all): if there are multiple savers, how to trigger
                                             the saving.
         """
+        ckpt_dir = os.path.dirname(ckpt_file)
         if save_several_mode not in [all, any]:
             raise ValueError(
                 f"save_several_mode must be either all or any, got {save_several_mode}"
@@ -83,6 +84,7 @@ class Saver:
         self._save_interval = save_interval
         self.save_several_mode = save_several_mode
         self.logger = logging.getLogger(__name__)
+        self.ckpt_file = ckpt_file
 
     def _do_save(self, new_val):
         """Check whether need to save"""
@@ -107,13 +109,13 @@ class Saver:
                 )
             self.best_val = new_val
             dict_to_save["best_val"] = new_val
-            torch.save(dict_to_save, "{}/checkpoint.pth.tar".format(self.ckpt_dir))
+            torch.save(dict_to_save, "{}/best_{}".format(self.ckpt_dir, os.path.basename(self.ckpt_file)))
             return True
         elif self._counter % self._save_interval == 0:
             self.logger.info(" Saving at epoch {}.".format(dict_to_save["epoch"]))
             dict_to_save["best_val"] = self.best_val
             torch.save(
-                dict_to_save, "{}/counter_checkpoint.pth.tar".format(self.ckpt_dir)
+                dict_to_save, "{}/counter_{}".format(self.ckpt_dir, os.path.basename(self.ckpt_file))
             )
             return False
         return False

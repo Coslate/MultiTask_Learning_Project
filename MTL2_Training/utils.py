@@ -91,8 +91,10 @@ class RandomMirror(object):
         msk_keys = sample["names"]
         do_mirror = np.random.randint(2)
         if do_mirror:
+            msk = image
             sample["image"] = cv2.flip(image, 1)
             for msk_key in msk_keys:
+                msk = sample[msk_key]
                 scale_mult = [-1, 1, 1] if "normal" in msk_key else 1
                 sample[msk_key] = scale_mult * cv2.flip(sample[msk_key], 1)
         return sample
