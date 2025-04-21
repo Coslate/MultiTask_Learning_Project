@@ -1,5 +1,5 @@
 
-# HydraNet: Multi-Task Learning with Pretrained Encoder and Decoder
+# Multi-Task Learning for Real-Time 3D Segmentation and Depth Estimation
 
 This project implements a multi-task learning pipeline on the NYUv2 dataset using:
 
