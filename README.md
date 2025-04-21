@@ -100,7 +100,7 @@ CUDA_VISIBLE_DEVICES=4 python ./pretrain_autoencoder_main.py --lr_enc 3e-4 --cas
 
 ```bash
 cd ./MTL2_Training
-UDA_VISIBLE_DEVICES=1 python ./main.py --load_init 1 --load_pretrained 1 --load_resume 0 --init_chkpt_file_enc ./weight/pretrained_full.autoencoder.luc.pth.tar --init_chkpt_file_dec ./weight/pretrained_full.autoencoder.luc.pth.tar --out_chkpt_file ./checkpoint.resume_baseline.pth.tar --max_iter 5001 --cas_T_0_enc 5001 --cas_T_0_dec 5001 --lr_enc 1e-3 --cas_min_lr_enc 9e-5 --cas_final_lr_enc 1e-6 --lr_dec 5e-4 --cas_min_lr_dec 5e-5 --cas_final_lr_dec 1e-6 --cas_warmup_steps_enc 150 --cas_warmup_steps_dec 300 --val_every 100 --save_freq 500 --show_lr_freq_epoch 500 --freeze_enc_epoch 500
+UDA_VISIBLE_DEVICES=1 python ./main.py --load_init 1 --load_pretrained 1 --load_resume 0 --init_chkpt_file_enc ./weight/pretrained_full.autoencoder.luc.pth.tar --init_chkpt_file_dec ./weight/pretrained_full.autoencoder.luc.pth.tar --out_chkpt_file ./checkpoint.resume_baseline.pth.tar --max_iter 5001 --cas_T_0_enc 5001 --cas_T_0_dec 5001 --lr_enc 3e-4 --cas_min_lr_enc 2e-5 --cas_final_lr_enc 1e-6 --lr_dec 5e-4 --cas_min_lr_dec 5e-5 --cas_final_lr_dec 1e-6 --cas_warmup_steps_enc 150 --cas_warmup_steps_dec 300 --val_every 100 --save_freq 500 --show_lr_freq_epoch 500 --freeze_enc_epoch 200
 ```
 
 ---
