@@ -10,7 +10,7 @@ import glob
 import argparse
 from torch.utils.data import DataLoader
 from torch.utils.data import Dataset
-from utils import Normalise, RandomCrop, ToTensor, RandomMirror
+from utils import Normalise, RandomCrop, ToTensor, RandomMirror, get_param_groups
 import torchvision.transforms as transforms
 import os
 from utils import InvHuberLoss
@@ -22,16 +22,21 @@ from utils import AverageMeter
 from tqdm import tqdm
 from utils import MeanIoU, RMSE
 from merge_shuff import shuffle_and_split_data
+from hydranet import *
+from scheduler import *
+from dataset import *
 import gc
 
 #clears Python-level unreferenced objects.
 gc.collect()  # Collects unused Python objects
 torch.cuda.empty_cache()  # Releases GPU memory
 
-#Argument
+# ============= Argument ================#
 def get_args_parser():
     parser = argparse.ArgumentParser('Singleto3D', add_help=False)
     # Model parameters
+    parser.add_argument('--lr_sigma_seg', default=1e-3, type=float)
+    parser.add_argument('--lr_sigma_depth', default=1e-4, type=float)
     parser.add_argument('--lr_enc', default=8e-3, type=float)
     parser.add_argument('--lr_dec', default=8e-4, type=float)
     parser.add_argument('--max_iter', default=5000, type=int)
@@ -39,8 +44,8 @@ def get_args_parser():
     parser.add_argument('--num_workers', default=8, type=int)
     parser.add_argument('--save_freq', default=100, type=int)    
     parser.add_argument('--early_stop_iter', default=None, type=int)           
-    parser.add_argument('--cas_warmup_steps_enc', default=20, type=int)
-    parser.add_argument('--cas_warmup_steps_dec', default=30, type=int)
+    parser.add_argument('--cas_warmup_steps_enc', default=100, type=int) # 3% - 5% of total iterations
+    parser.add_argument('--cas_warmup_steps_dec', default=300, type=int) # 5% - 10% of total iterations
     parser.add_argument('--cas_min_lr_enc', default=1e-3, type=float)
     parser.add_argument('--cas_min_lr_dec', default=1e-4, type=float)
     parser.add_argument('--cas_final_lr_enc', default=8e-4, type=float)
@@ -49,12 +54,30 @@ def get_args_parser():
     parser.add_argument('--cas_T_0_dec', default=5000, type=int)
     parser.add_argument('--cas_T_mult_enc', default=1, type=int)
     parser.add_argument('--cas_T_mult_dec', default=1, type=int)
+    parser.add_argument('--cas_warmup_steps_sigma_seg', default=0, type=int)
+    parser.add_argument('--cas_warmup_steps_sigma_depth', default=0, type=int)
+    parser.add_argument('--cas_min_lr_sigma_seg', default=1e-5, type=float)
+    parser.add_argument('--cas_min_lr_sigma_depth', default=1e-6, type=float)
+    parser.add_argument('--cas_final_lr_sigma_seg', default=8e-6, type=float)
+    parser.add_argument('--cas_final_lr_sigma_depth', default=8e-7, type=float)
+    parser.add_argument('--cas_T_0_sigma_seg', default=5000, type=int)
+    parser.add_argument('--cas_T_0_sigma_depth', default=5000, type=int)
+    parser.add_argument('--cas_T_mult_sigma_seg', default=1, type=int)
+    parser.add_argument('--cas_T_mult_sigma_depth', default=1, type=int)
     parser.add_argument('--show_lr_freq_epoch', default=100, type=int)
     parser.add_argument('--load_init', default=0, type=int)
+    parser.add_argument('--load_pretrained', default=0, type=int)
     parser.add_argument('--load_resume', default=1, type=int)
+    parser.add_argument('--init_chkpt_file_enc', default='./pretrained_hydranet_encoder.320_256.multiscale_dense.pth.tar', type=str)
+    parser.add_argument('--init_chkpt_file_dec', default='./pretrained_hydranet_decoder.autoencoder.pth.tar', type=str)
     parser.add_argument('--out_chkpt_file', default='./checkpoint.pth.tar', type=str)
-    parser.add_argument('--train_split_ratio', default=0.8, type=float)
+    parser.add_argument('--load_metric_file', default='./metrics_loss_data.npz', type=str)
+    parser.add_argument('--train_ratio', default=0.9, type=float)
+    parser.add_argument('--val_ratio', default=0.05, type=float)
+    parser.add_argument('--test_ratio', default=0.05, type=float)
     parser.add_argument('--shuffle_dataset', default=0, type=int)
+    parser.add_argument('--val_every', default=100, type=int)
+    parser.add_argument('--freeze_enc_epoch', default=500, type=int)
     return parser    
 
 
@@ -65,38 +88,7 @@ depth = sorted(glob.glob("./nyud/depth/*.png"))
 seg = sorted(glob.glob("./nyud/masks/*.png"))
 images = sorted(glob.glob("./nyud/rgb/*.png"))
 
-#Dataset Definintion
-class HydranetDataset(Dataset):
-
-    def __init__(self, data_file, transform=None):
-        with open(data_file, "rb") as f:
-            datalist = f.readlines()
-        self.datalist = [x.decode("utf-8").strip("\n").split("\t") for x in datalist]
-        self.root_dir = "nyud"
-        self.transform = transform
-        self.masks_names = ("segm", "depth")
-
-    def __len__(self):
-        return len(self.datalist)
-
-    def __getitem__(self, idx):
-        abs_paths = [os.path.join(self.root_dir, rpath) for rpath in self.datalist[idx]] # Will output list of nyud/*/00000.png
-        sample = {}
-        sample["image"] = np.array(Image.open(abs_paths[0]))
-
-        for mask_name, mask_path in zip(self.masks_names, abs_paths[1:]):
-            sample[f"{mask_name}"] = np.array(Image.open(mask_path))
-
-        if self.transform:
-            sample["names"] = self.masks_names
-            sample = self.transform(sample)
-            # the names key can be removed by the transformation
-            if "names" in sample:
-                del sample["names"]
-        return sample
-
-
-#DataLoader
+# ============= Dataset & Dataloader ================#
 img_scale = 1.0 / 255
 depth_scale = 5000.0
 
@@ -120,9 +112,10 @@ train_batch_size = 4
 val_batch_size = 4
 train_file = "./train_list_depth.txt"
 val_file = "./val_list_depth.txt"
+test_file = "./test_list_depth.txt"
 CMAP = np.load('cmap_nyud.npy')
 if args.shuffle_dataset == 1:
-    shuffle_and_split_data(train_file=train_file, val_file=val_file, train_split_ratio=args.train_split_ratio)
+    shuffle_and_split_data(train_file=train_file, val_file=val_file, test_file=test_file, train_ratio=args.train_ratio, val_ratio=args.val_ratio, test_ratio=args.test_ratio)
 
 #TRAIN DATALOADER
 trainloader = DataLoader(HydranetDataset(train_file, transform_train),
@@ -140,202 +133,7 @@ valloader = DataLoader(HydranetDataset(val_file, transform_val),
                        pin_memory=True,
                        drop_last=False)
 
-#Model Architecture
-def conv3x3(in_channels, out_channels, stride=1, dilation=1, groups=1, bias=False):
-    """3x3 Convolution: Depthwise:
-    https://pytorch.org/docs/stable/generated/torch.nn.Conv2d.html
-    """
-    return nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=stride, padding=dilation, dilation=dilation, bias=bias, groups=groups)
-
-def conv1x1(in_channels, out_channels, stride=1, groups=1, bias=False,):
-    "1x1 Convolution: Pointwise"
-    return nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=stride, padding=0, bias=bias, groups=groups)
-
-def batchnorm(num_features):
-    """
-    https://pytorch.org/docs/stable/generated/torch.nn.BatchNorm2d.html
-    """
-    return nn.BatchNorm2d(num_features, affine=True, eps=1e-5, momentum=0.1)
-
-def convbnrelu(in_channels, out_channels, kernel_size, stride=1, groups=1, act=True):
-    "conv-batchnorm-relu"
-    if act:
-        return nn.Sequential(nn.Conv2d(in_channels, out_channels, kernel_size, stride=stride, padding=int(kernel_size / 2.), groups=groups, bias=False),
-                             batchnorm(out_channels),
-                             nn.ReLU6(inplace=True))
-    else:
-        return nn.Sequential(nn.Conv2d(in_channels, out_channels, kernel_size, stride=stride, padding=int(kernel_size / 2.), groups=groups, bias=False),
-                             batchnorm(out_channels))
-
-class InvertedResidualBlock(nn.Module):
-    """Inverted Residual Block from https://arxiv.org/abs/1801.04381"""
-    def __init__(self, in_planes, out_planes, expansion_factor, stride=1):
-        super().__init__() # Python 3
-        intermed_planes = in_planes * expansion_factor
-        self.residual = (in_planes == out_planes) and (stride == 1) # Boolean/Condition
-        self.output = nn.Sequential(convbnrelu(in_planes, intermed_planes, 1),
-                                    convbnrelu(intermed_planes, intermed_planes, 3, stride=stride, groups=intermed_planes),
-                                    convbnrelu(intermed_planes, out_planes, 1, act=False))
-
-    def forward(self, x):
-        #residual = x
-        out = self.output(x)
-        if self.residual:
-            return (out + x)#+residual
-        else:
-            return out
-
-
-def make_list(x):
-    """Returns the given input as a list."""
-    if isinstance(x, list):
-        return x
-    elif isinstance(x, tuple):
-        return list(x)
-    else:
-        return [x]
-
-class CRPBlock(nn.Module):
-    """CRP definition"""
-    def __init__(self, in_planes, out_planes, n_stages, groups=False):
-        super().__init__()
-        for i in range(n_stages):
-            if groups:
-                setattr(self, '{}_{}'.format(i + 1, 'outvar_dimred'),
-                    conv1x1(in_planes if (i == 0) else out_planes,
-                            out_planes, stride=1,
-                            bias=False, groups= in_planes if i==0 else out_planes))
-            else:
-                setattr(self, '{}_{}'.format(i + 1, 'outvar_dimred'),
-                    conv1x1(in_planes if (i == 0) else out_planes,
-                            out_planes, stride=1,
-                            bias=False, groups=1))
-
-        self.stride = 1
-        self.n_stages = n_stages
-        self.maxpool = nn.MaxPool2d(kernel_size=5, stride=1, padding=2)
-
-    def forward(self, x):
-        top = x
-        for i in range(self.n_stages):
-            top = self.maxpool(top)
-            top = getattr(self, '{}_{}'.format(i + 1, 'outvar_dimred'))(top)
-            x = top + x
-        return x
-
-class HydraNet(nn.Module):
-    """Net Definition"""
-    def __init__(self, in_channels=32, num_classes=6, num_tasks=2, agg_size=256, n_crp=4):
-        super().__init__()
-        self.num_tasks = num_tasks
-        self.num_classes = num_classes
-    ## Encoder-MobileNetV2 ##
-        self.mobilenet_config = [[1, 16, 1, 1], # expansion rate, output channels, number of repeats, stride
-                    [6, 24, 2, 2],
-                    [6, 32, 3, 2],
-                    [6, 64, 4, 2],
-                    [6, 96, 3, 1],
-                    [6, 160, 3, 2],
-                    [6, 320, 1, 1],
-                    ]
-        self.in_channels = in_channels # number of input channels
-        self.num_layers = len(self.mobilenet_config)
-        self.layer1 = convbnrelu(3, self.in_channels, kernel_size=3, stride=2)
-
-        c_layer = 2
-        for t,c,n,s in (self.mobilenet_config):
-            layers = []
-            for idx in range(n):
-                layers.append(InvertedResidualBlock(self.in_channels, c, expansion_factor=t, stride=s if idx == 0 else 1))
-                self.in_channels = c
-            setattr(self, 'layer{}'.format(c_layer), nn.Sequential(*layers)) # setattr(object, name, value)
-            c_layer += 1
-
-        ## Decoder-Light-Weight RefineNet ##
-        self.conv8 = conv1x1(320, 256, bias=False)
-        self.conv7 = conv1x1(160, 256, bias=False)
-        self.conv6 = conv1x1(96, 256, bias=False)
-        self.conv5 = conv1x1(64, 256, bias=False)
-        self.conv4 = conv1x1(32, 256, bias=False)
-        self.conv3 = conv1x1(24, 256, bias=False)
-        self.crp4 = self._make_crp(in_planes=256, out_planes=256, stages=4, groups=False)
-        self.crp3 = self._make_crp(in_planes=256, out_planes=256, stages=4, groups=False)
-        self.crp2 = self._make_crp(in_planes=256, out_planes=256, stages=4, groups=False)
-        self.crp1 = self._make_crp(in_planes=256, out_planes=256, stages=4, groups=True)
-
-        self.conv_adapt4 = conv1x1(256, 256, bias=False)
-        self.conv_adapt3 = conv1x1(256, 256, bias=False)
-        self.conv_adapt2 = conv1x1(256, 256, bias=False)
-
-        self.pre_depth = conv1x1(256, 256, groups=256, bias=False)# Define the Purple Pre-Head for Depth
-        self.depth = conv3x3(256, 1, bias=True)# Define the Final layer of Depth
-        self.pre_segm = conv1x1(256, 256, groups=256, bias=False)#: Call the Purple Pre-Head for Segm
-        self.segm = conv3x3(256, self.num_classes, bias=True)#: Define the Final layer of Segmentation
-        self.relu = nn.ReLU6(inplace=True)#: Define a RELU 6 Operation
-
-        if self.num_tasks == 3:
-            # Create a Normal Head
-            self.pre_normal = conv1x1(256, 256, groups=256, bias=False)
-            self.normal = conv3x3(256, 3, bias=True)
-
-    def forward(self, x):
-        # MOBILENET V2
-        x = self.layer1(x)
-        x = self.layer2(x) # x / 2
-        l3 = self.layer3(x) # 24, x / 4
-        l4 = self.layer4(l3) # 32, x / 8
-        l5 = self.layer5(l4) # 64, x / 16
-        l6 = self.layer6(l5) # 96, x / 16
-        l7 = self.layer7(l6) # 160, x / 32
-        l8 = self.layer8(l7) # 320, x / 32
-
-    # LIGHT-WEIGHT REFINENET
-        l8 = self.conv8(l8)
-        l7 = self.conv7(l7)
-        l7 = self.relu(l8 + l7)
-        l7 = self.crp4(l7)
-        l7 = self.conv_adapt4(l7)
-        l7 = nn.Upsample(size=l6.size()[2:], mode='bilinear', align_corners=False)(l7)
-
-        l6 = self.conv6(l6)
-        l5 = self.conv5(l5)
-        l5 = self.relu(l5 + l6 + l7)
-        l5 = self.crp3(l5)
-        l5 = self.conv_adapt3(l5)
-        l5 = nn.Upsample(size=l4.size()[2:], mode='bilinear', align_corners=False)(l5)
-
-        l4 = self.conv4(l4)
-        l4 = self.relu(l5 + l4)
-        l4 = self.crp2(l4)
-        l4 = self.conv_adapt2(l4)
-        l4 = nn.Upsample(size=l3.size()[2:], mode='bilinear', align_corners=False)(l4)
-
-        l3 = self.conv3(l3)
-        l3 = self.relu(l3 + l4)
-        l3 = self.crp1(l3)
-
-        # HEADS 
-        out_segm = self.pre_segm(l3)
-        out_segm = self.relu(out_segm)
-        out_segm = self.segm(out_segm)
-
-        out_d = self.pre_depth(l3)
-        out_d = self.relu(out_d)
-        out_d = self.depth(out_d)
-
-        if self.num_tasks == 3:
-            out_n = self.pre_normal(l3)
-            out_n = self.relu(out_n)
-            out_n = self.normal(out_n)
-            return out_segm, out_d, out_n
-        else:
-            return out_segm, out_d
-
-    def _make_crp(self, in_planes, out_planes, stages, groups=False):
-        layers = [CRPBlock(in_planes, out_planes,stages, groups=groups)]
-        return nn.Sequential(*layers)
-
-#Loss Definition
+# ============= Loss Deinition ================#
 ignore_index = 0
 ignore_depth = 0
 
@@ -356,79 +154,15 @@ saver = Saver(
     save_several_mode=all,
 )
 
-def get_params(model):
-    encoder_params = []
-    decoder_params = []
-    for name, param in model.named_parameters():
-        if "layer" in name:  # Encoder layers
-            encoder_params.append(param)
-        else:  # Decoder layers
-            decoder_params.append(param)
-    return encoder_params, decoder_params
-
-#Model Instance
+# ============= Model Instance ================#
 num_classes, num_tasks = 40, 2
 hydranet_model = HydraNet(num_classes=num_classes, num_tasks=num_tasks)
 #hydranet = nn.DataParallel(nn.Sequential(encoder, decoder).cuda()) # Use .cpu() if you prefer a slow death
 
-#load pre-trained weight
-#ckpt = torch.load('../../weights/ExpKITTI_joint.ckpt')
-#hydranet_model.load_state_dict(ckpt['state_dict'])
-if args.load_init == 1:
-    ckpt_path = './weights/ExpKITTI_joint.ckpt'
-    train_losses = []
-    val_losses = []
-    val_epochs = []
-    mean_iou_values = []
-    rmse_values = []
-elif args.load_resume == 1:
-    ckpt_path = args.out_chkpt_file
-
-    # Load the .npz file
-    loaded_data = np.load("metrics_loss_data.npz")
-
-    # Extract arrays
-    train_losses = list(loaded_data["train_losses"])
-    val_losses = list(loaded_data["val_losses"])
-    val_epochs = list(loaded_data["val_epochs"])
-    mean_iou_values = list(loaded_data["mean_iou_values"])
-    rmse_values = list(loaded_data["rmse_values"])
-
-start_epoch, _, state_dict = saver.maybe_load(ckpt_path=ckpt_path, keys_to_load=["epoch", "best_val", "state_dict"],)
-# Remove the segmentation head weights (since the number of classes changed)
-filtered_state_dict = {k: v for k, v in state_dict.items() if "segm" not in k}
-# Load only matching parameters
-#hydranet_model.load_state_dict(filtered_state_dict, strict=False)
-load_state_dict(hydranet_model, filtered_state_dict)
-print("Model has {} parameters".format(sum([p.numel() for p in hydranet_model.parameters()])))
-
 if torch.cuda.is_available():
     _ = hydranet_model.cuda()
 
-if start_epoch is None:
-    start_epoch = 0
-
-# Freeze only the encoder part
-for name, param in hydranet_model.named_parameters():
-    if "layer" in name:  # Assuming encoder layers follow this naming convention
-        param.requires_grad = False  # Freeze encoder
-    else:
-        param.requires_grad = True   # Keep decoder trainable
-
-print("All encoder layers are frozen, while decoder layers remain trainable.")
-for name, param in hydranet_model.named_parameters():
-    print(f"{name}: {'Frozen' if not param.requires_grad else 'Trainable'}")
-'''
-# Freeze all layers except pre_depth, depth, pre_segm, segm
-for name, param in hydranet_model.named_parameters():
-    if not any(key in name for key in ["pre_depth", "depth", "pre_segm", "segm"]):
-        param.requires_grad = False  # Freeze layers
-    else:
-        param.requires_grad = True   # Keep these layers trainable
-
-print("All layers frozen except pre_depth, depth, pre_segm, and segm.")
-'''
-#################### Optimizer #########################
+# ============ Optimizer ================#
 '''
 lr_encoder = 1e-2
 lr_decoder = 1e-3
@@ -450,68 +184,12 @@ weight_decay_decoder = 1e-5
 '''Adam'''
 # Extract encoder parameters (MobileNetV2)
 # Extract decoder parameters (RefineNet)
-encoder_params, decoder_params = get_params(hydranet_model)
+encoder_params, decoder_params, segm_head_params = get_param_groups(hydranet_model)
 optimizer_encoder = torch.optim.Adam(encoder_params, lr=lr_encoder, betas=betas_encoder,weight_decay=weight_decay_encoder)
-optimizer_decoder = torch.optim.Adam(decoder_params, lr=lr_decoder, betas=betas_decoder,weight_decay=weight_decay_decoder)
-
-class CustomScheduler:
-    def __init__(self, optimizer, warmup_steps, total_steps, min_lr, max_lr, final_lr, T_0, T_mult):
-        """
-        Custom Learning Rate Scheduler.
-        
-        - Warmup (Linear): Increases from min_lr to max_lr over `warmup_steps`
-        - Cosine Annealing: Decays from max_lr to mid-range (5e-4) until 8000 steps
-        - Final Linear Decay: Reduces from 5e-4 to final_lr over last 2000 steps
-
-        Args:
-            optimizer: PyTorch optimizer
-            warmup_steps: Number of warmup steps
-            total_steps: Total training steps
-            min_lr: Starting learning rate
-            max_lr: Peak learning rate
-            final_lr: Final learning rate at the end of training
-        """
-        self.optimizer = optimizer
-        self.warmup_steps = warmup_steps
-        self.total_steps = total_steps
-        self.min_lr = min_lr
-        self.max_lr = max_lr
-        self.final_lr = final_lr
-        self.current_step = 0
-        self.T_0 = T_0
-        self.T_mult = T_mult
-        self.cos_anneal_stage = self.warmup_steps+self.T_0
-        self.fin_mid_lr = (self.max_lr + self.min_lr)/2
-
-        # Cosine Annealing Phase (Mid-Phase: 5e-4 as transition point)
-        #self.cosine_scheduler = CosineAnnealingLR(optimizer, T_max=(8000 - warmup_steps), eta_min=5e-4)
-        self.cosine_scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=self.T_0, T_mult=self.T_mult, eta_min=self.min_lr)
-
-    def step(self, step=None):
-        if step is not None:
-            self.current_step = step
-        else:
-            self.current_step += 1
-
-        if self.current_step < self.warmup_steps:
-            # Linear warm-up
-            progress = self.current_step / self.warmup_steps
-            new_lr = self.min_lr + (self.max_lr - self.min_lr) * progress
-        elif self.current_step < self.cos_anneal_stage:
-            # Cosine annealing decay
-            self.cosine_scheduler.step()
-            new_lr = self.cosine_scheduler.get_last_lr()[0]
-        else:
-            # Final decay to stabilize learning
-            progress = (self.current_step - self.cos_anneal_stage) / (self.total_steps - self.cos_anneal_stage)
-            new_lr = self.fin_mid_lr + (self.final_lr - self.fin_mid_lr) * progress
-
-        # Apply new learning rate
-        for param_group in self.optimizer.param_groups:
-            param_group['lr'] = new_lr
-
-    def get_last_lr(self):
-        return [param_group['lr'] for param_group in self.optimizer.param_groups]
+optimizer_decoder = torch.optim.Adam([
+    {'params': decoder_params, 'lr': lr_decoder},
+    {'params': segm_head_params, 'lr': lr_decoder * 3},  # ← 3× higher LR for segm head
+], betas=betas_decoder, weight_decay=weight_decay_decoder)
 
 # ============ Cosine Annealing Scheduler ================#
 learning_rate_enc = args.lr_enc  # Max LR, 9e-4
@@ -529,7 +207,153 @@ T_mult_enc = args.cas_T_mult_enc
 T_mult_dec = args.cas_T_mult_dec
 
 cas_scheduler_enc = CustomScheduler(optimizer_encoder, warmup_steps_enc, total_steps, min_lr_enc, learning_rate_enc, final_lr_enc, T_0_enc, T_mult_enc)    
-cas_scheduler_dec = CustomScheduler(optimizer_decoder, warmup_steps_dec, total_steps, min_lr_dec, learning_rate_dec, final_lr_dec, T_0_dec, T_mult_dec)    
+cas_scheduler_dec = CustomScheduler(optimizer_decoder, warmup_steps_dec, total_steps, min_lr_dec, learning_rate_dec, final_lr_dec, T_0_dec, T_mult_dec)
+
+# ================Learnable Uncertainty Weighting (Kendall et al., 2018)===================#
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+betas_sigma_seg = (0.9, 0.99)
+betas_sigma_depth = (0.9, 0.999)
+weight_decay_sigma_seg = 1e-5
+weight_decay_sigma_depth = 1e-5
+
+log_sigma_seg = nn.Parameter(torch.zeros(1, device=device), requires_grad=True)  # For segmentation
+log_sigma_depth = nn.Parameter(torch.zeros(1, device=device), requires_grad=True)  # For depth
+
+optimizer_sigma_seg = torch.optim.Adam([log_sigma_seg], lr=args.lr_sigma_seg, betas=betas_sigma_seg, weight_decay=weight_decay_sigma_seg)
+optimizer_sigma_depth = torch.optim.Adam([log_sigma_depth], lr=args.lr_sigma_depth, betas=betas_sigma_depth, weight_decay=weight_decay_sigma_depth)
+
+#cas_scheduler_sigma_seg = CustomScheduler(optimizer_sigma_seg, args.cas_warmup_steps_sigma_seg, total_steps, args.cas_min_lr_sigma_seg, args.lr_sigma_seg, args.cas_final_lr_sigma_seg, args.cas_T_0_sigma_seg, args.cas_T_mult_sigma_seg)    
+#cas_scheduler_sigma_depth = CustomScheduler(optimizer_sigma_depth, args.cas_warmup_steps_sigma_depth, total_steps, args.cas_min_lr_sigma_depth, args.lr_sigma_depth, args.cas_final_lr_sigma_depth, args.cas_T_0_sigma_depth, args.cas_T_mult_sigma_depth)    
+
+# ============ Load Initial / Reload ================#
+if args.load_init == 1 and args.load_pretrained == 1:
+    train_losses = []
+    val_losses = []
+    val_epochs = []
+    mean_iou_values = []
+    rmse_values = []
+    start_epoch = None
+elif args.load_init == 1 and args.load_pretrained == 0:
+    ckpt_path = './weights/ExpKITTI_joint.ckpt'
+    train_losses = []
+    val_losses = []
+    val_epochs = []
+    mean_iou_values = []
+    rmse_values = []
+    start_epoch = None
+elif args.load_resume == 1:
+    ckpt_path = args.out_chkpt_file
+
+    # Load the .npz file
+    loaded_data = np.load(args.load_metric_file)
+
+    # Extract arrays
+    train_losses = list(loaded_data["train_losses"])
+    val_losses = list(loaded_data["val_losses"])
+    val_epochs = list(loaded_data["val_epochs"])
+    mean_iou_values = list(loaded_data["mean_iou_values"])
+    rmse_values = list(loaded_data["rmse_values"])
+
+if args.load_init == 1 and args.load_pretrained == 1 and args.load_resume == 0:
+    # Load encoder weights
+    encoder_ckpt = torch.load(args.init_chkpt_file_enc)
+    encoder_state_dict = encoder_ckpt['state_dict'] if 'state_dict' in encoder_ckpt else encoder_ckpt
+
+    # Filter only keys related to 'layer' blocks (layer1 - layer8)
+    encoder_state_dict_filtered = {
+        k: v for k, v in encoder_state_dict.items()
+        if k.startswith("layer") or k.startswith("final_conv")
+    }
+
+    # Load weights into HydraNet encoder
+    hydranet_encoder = hydranet_model.extract_encoder(init=False)
+    load_state_dict(hydranet_encoder, encoder_state_dict_filtered, strict=False)
+    print("Encoder weights loaded from:", args.init_chkpt_file_enc)
+
+    # Load decoder weights
+    # Load the full checkpoint state_dict (no 'state_dict' key wrapper)
+    decoder_ckpt = torch.load(args.init_chkpt_file_dec)  # path to pretrained_full.autoencoder.pth.tar
+
+    # Get encoder keys from a clean HydraNet instance
+    encoder_keys = hydranet_model.extract_encoder(init=False).state_dict().keys()
+
+    # Filter only decoder weights
+    decoder_state_dict = {
+        k: v for k, v in decoder_ckpt.items()
+        if k not in encoder_keys and not k.startswith("segm.")
+    }    
+
+    # Load them into the full HydraNet model
+    load_state_dict(hydranet_model, decoder_state_dict, strict=False)
+    print("Decoder weights loaded from:", args.init_chkpt_file_dec)
+
+    print("Model has {} parameters".format(sum([p.numel() for p in hydranet_model.parameters()])))    
+
+    #-----------Check if Missing Key-----------#
+    loaded_keys = set(list(encoder_state_dict_filtered.keys()) + list(decoder_state_dict.keys()))
+    model_keys = set(hydranet_model.state_dict().keys())
+
+    missing_keys = sorted(list(model_keys - loaded_keys))
+    unexpected_keys = sorted(list(loaded_keys - model_keys))
+
+    print(f"\n Total model keys: {len(model_keys)}")
+    print(f"Missing keys (expected by model but not found in loaded weights): {len(missing_keys)}")
+    for k in missing_keys:
+        print(f"  - {k}")
+
+    print(f"\nUnexpected keys (found in loaded weights but not used in model): {len(unexpected_keys)}")
+    for k in unexpected_keys:
+        print(f"  - {k}")    
+elif args.load_init == 1 and args.load_pretrained == 0 and args.load_resume == 0: #Load third-party pretrained
+    # If the pretrained model has different num_classs in segm head, remove the segmentation head weights (since the number of classes changed)
+    start_epoch, _, state_dict = saver.maybe_load(ckpt_path=ckpt_path, keys_to_load=["epoch", "best_val", "state_dict"], ret_ckpt=False)
+    filtered_state_dict = {k: v for k, v in state_dict.items() if "segm" not in k}
+    load_state_dict(hydranet_model, filtered_state_dict)
+    print("Model has {} parameters".format(sum([p.numel() for p in hydranet_model.parameters()])))
+elif args.load_resume == 1:
+    # If the pretrained model has different num_classs in segm head, remove the segmentation head weights (since the number of classes changed)
+    [start_epoch, _, state_dict], checkpoint = saver.maybe_load(ckpt_path=ckpt_path, keys_to_load=["epoch", "best_val", "state_dict"], ret_ckpt=True)
+    filtered_state_dict = {k: v for k, v in state_dict.items() if "segm" not in k}
+    load_state_dict(hydranet_model, filtered_state_dict)
+    print("Model has {} parameters".format(sum([p.numel() for p in hydranet_model.parameters()])))
+
+    # Restore the custom optimizer states
+    optimizer_encoder.load_state_dict(checkpoint['optimizer_encoder'])  # Restore encoder optimizer
+    optimizer_decoder.load_state_dict(checkpoint['optimizer_decoder'])  # Restore decoder optimizer
+    optimizer_sigma_seg.load_state_dict(checkpoint['optimizer_sigma_seg'])  # Restore encoder optimizer
+    optimizer_sigma_depth.load_state_dict(checkpoint['optimizer_sigma_depth'])  # Restore decoder optimizer
+
+    # Restore the custom scheduler states
+    cas_scheduler_enc.__dict__.update(checkpoint['scheduler_encoder'])
+    cas_scheduler_dec.__dict__.update(checkpoint['scheduler_decoder'])    
+    #cas_scheduler_sigma_seg.__dict__.update(checkpoint['scheduler_sigma_seg'])
+    #cas_scheduler_sigma_depth.__dict__.update(checkpoint['scheduler_sigma_depth'])    
+    print(f"Restored Encoder LR: {optimizer_encoder.param_groups[0]['lr']}")
+    print(f"Restored Decoder LR: {optimizer_decoder.param_groups[0]['lr']}")
+    print(f"Restored sigma_seg LR: {optimizer_sigma_seg.param_groups[0]['lr']}")
+    print(f"Restored sigma_depth LR: {optimizer_sigma_depth.param_groups[0]['lr']}")
+
+# ================Weight Initialization===================#
+if start_epoch is None:
+    start_epoch = 0
+
+# Apply weight initialization ONLY to decoder layers
+"""
+for name, module in hydranet_model.named_modules():
+    if not (name.startswith("layer") or name.startswith("final_conv")):  # Exclude encoder layers & final_conv
+        HydraNet._initialize_weights(module)  # Apply initialization to non-encoder layers
+"""
+
+# Freeze encoder layers (optional)
+for name, param in hydranet_model.named_parameters():
+    if name.startswith("layer") or name.startswith("final_conv"):  # Freeze encoder layers and final_conv
+        param.requires_grad = False
+    else:
+        param.requires_grad = True  # Keep decoder layers trainable
+
+print("Encoder weights loaded, decoder weights initialized, and encoder frozen.")
+for name, param in hydranet_model.named_parameters():
+    print(f"{name}: {'Frozen' if not param.requires_grad else 'Trainable'}")
 
 # ================Training Procedure===================#
 def train(model, opts, crits, dataloader, train_losses, loss_coeffs=(1.0,), grad_norm=0.0):
@@ -552,22 +376,19 @@ def train(model, opts, crits, dataloader, train_losses, loss_coeffs=(1.0,), grad
             target = target.squeeze(dim=1)  # Ensure (B, H, W)
             target = torch.clamp(target, 0, num_classes - 1)  # Ensure valid class range
             out = F.interpolate(out, size=target.size()[1:], mode="bilinear", align_corners=False)  # Resize logits
+            '''
+            if crit == crit_segm:
+                task_loss = crit(out, target)
+                weighted_loss = (1.0 / (2.0 * torch.exp(2 * log_sigma_seg))) * task_loss + log_sigma_seg
+            elif crit == crit_depth:
+                task_loss = crit(out, target)
+                weighted_loss = (1.0 / (2.0 * torch.exp(2 * log_sigma_depth))) * task_loss + log_sigma_depth
+
+            loss += weighted_loss
+            '''
             loss += loss_coeff * crit(out, target)  # Compute loss            
 
-            '''
-            print(f"Prediction shape: {out.shape}, Target shape: {target.shape}")
-            print(f"Target dtype: {target.dtype}, Unique values: {target.unique()}")
-            loss += loss_coeff * crit(
-                F.interpolate(
-                    out, size=target.size()[2:], mode="bilinear", align_corners=False
-                ).squeeze(dim=1),
-                target.squeeze(dim=1),
-            )
-            '''
-
         # BACKWARD
-        for opt in opts:
-            opt.zero_grad()
         loss.backward()
         avg_losses.append(loss.item())
 
@@ -576,14 +397,19 @@ def train(model, opts, crits, dataloader, train_losses, loss_coeffs=(1.0,), grad
         for opt in opts:
             opt.step()
 
+        log_sigma_seg.data.clamp_(min=-3, max=3)
+        log_sigma_depth.data.clamp_(min=-3, max=3)
         loss_meter.update(loss.item())
         pbar.set_description(
             "Loss {:.3f} | Avg. Loss {:.3f}".format(loss.item(), loss_meter.avg)
         )
+
+        for opt in opts:
+            opt.zero_grad()
     train_losses.append(np.mean(avg_losses))
     
 
-def validate(model, metrics, dataloader, val_losses, crits, loss_coeffs):
+def validate(model, metrics, dataloader, val_losses, crits, loss_coeffs, epoch_num=0):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.eval()
     for metric in metrics:
@@ -598,6 +424,9 @@ def validate(model, metrics, dataloader, val_losses, crits, loss_coeffs):
         return vals, " | ".join(out)
 
     avg_losses = []
+    loss_seg_meter = AverageMeter()
+    loss_depth_meter = AverageMeter()
+    loss_total_meter = AverageMeter()
     with torch.no_grad():
         for sample in pbar:
             # Get the Data
@@ -607,13 +436,22 @@ def validate(model, metrics, dataloader, val_losses, crits, loss_coeffs):
             # Forward
             outputs = model(input)
             #outputs = make_list(outputs)
-            loss = 0
+            loss = 0.0
             for out, target, crit, loss_coeff in zip(outputs, targets, crits, loss_coeffs):
                 target = target.squeeze(dim=1)  # Ensure (B, H, W)
                 target = torch.clamp(target, 0, num_classes - 1)  # Ensure valid class range
                 out = F.interpolate(out, size=target.size()[1:], mode="bilinear", align_corners=False)  # Resize logits
-                loss += loss_coeff * crit(out, target)  # Compute loss            
+                if crit == crit_segm:
+                    task_loss = crit(out, target)
+                    loss_seg_meter.update(task_loss.item())
+                elif crit == crit_depth:
+                    task_loss = crit(out, target)
+                    loss_depth_meter.update(task_loss.item())
+
+                loss += loss_coeff*task_loss
+                #loss += loss_coeff * crit(out, target)  # Compute loss            
             avg_losses.append(loss.item())
+            loss_total_meter.update(loss.item())
 
             # Metric
             for out, target, metric in zip(outputs, targets, metrics):
@@ -623,32 +461,51 @@ def validate(model, metrics, dataloader, val_losses, crits, loss_coeffs):
                     target.squeeze(dim=1).cpu().numpy()
                 )
             pbar.set_description(get_val(metrics)[1])
-    val_losses.append(np.mean(avg_losses))
+        print(f"Validation at Epoch {epoch_num}, Avg. Segm Loss: {loss_seg_meter.avg:.4f} | Avg. Depth Loss: {loss_depth_meter.avg:.4f} | Avg. Task Loss: {loss_total_meter.avg:.4f}")
 
+    val_losses.append(np.mean(avg_losses))
     vals, _ = get_val(metrics)
     print("----" * 5)
     return vals
 
 #==================Main Loop=================#
-val_every = 100
 loss_coeffs = (0.5, 0.5)
 
 print(f"start_epoch = {start_epoch}")
-for i in range(start_epoch, n_epochs+1):
+for i in range(start_epoch, n_epochs):
     cas_scheduler_enc.step(i)
     cas_scheduler_dec.step(i)
+    #cas_scheduler_sigma_seg.step(i)
+    #cas_scheduler_sigma_depth.step(i)
+
+    # === Conditional Encoder Freezing ===
+    if i < args.freeze_enc_epoch:
+        for name, param in hydranet_model.named_parameters():
+            if name.startswith("layer"):  # Freeze encoder
+                param.requires_grad = False
+    else:
+        for name, param in hydranet_model.named_parameters():
+            param.requires_grad = True  # Unfreeze all
+
+    # Optional: print info
+    if i in [0, 199, 200, 300, 500, 501]:
+        print(f"[Epoch {i}] Encoder frozen? {not hydranet_model.layer1[0].weight.requires_grad}")
+
+
     if i % args.show_lr_freq_epoch == 0:
         current_lr_enc = optimizer_encoder.param_groups[0]['lr']
         current_lr_dec = optimizer_decoder.param_groups[0]['lr']
-        print(f"Epoch {i} | Encoder Learning Rate: {current_lr_enc:.6f}, Decoder Learning Rate: {current_lr_dec:.6f}")    
+        current_lr_sigma_seg = optimizer_sigma_seg.param_groups[0]['lr']
+        current_lr_sigma_depth = optimizer_sigma_depth.param_groups[0]['lr']
+        print(f"Epoch {i} | Encoder Learning Rate: {current_lr_enc:.6f}, Decoder Learning Rate: {current_lr_dec:.6f}, Sigma Seg Learning Rate: {current_lr_sigma_seg:.6f}, Sigma Depth Learning Rate: {current_lr_sigma_depth:.6f}")    
     
-    train(model=hydranet_model, opts=[optimizer_encoder, optimizer_decoder], crits=[crit_segm, crit_depth], dataloader=trainloader, train_losses=train_losses, loss_coeffs=loss_coeffs, grad_norm=0.0)
+    train(model=hydranet_model, opts=[optimizer_encoder, optimizer_decoder, optimizer_sigma_seg, optimizer_sigma_depth], crits=[crit_segm, crit_depth], dataloader=trainloader, train_losses=train_losses, loss_coeffs=loss_coeffs, grad_norm=0.0)
 
-    if i%val_every == 0:
+    if i%args.val_every == 0:
         metrics = [MeanIoU(num_classes), RMSE(ignore_val=ignore_depth)]
 
         with torch.no_grad():
-            vals = validate(model=hydranet_model, metrics=metrics, dataloader=valloader, val_losses=val_losses, crits=[crit_segm, crit_depth], loss_coeffs=loss_coeffs)
+            vals = validate(model=hydranet_model, metrics=metrics, dataloader=valloader, val_losses=val_losses, crits=[crit_segm, crit_depth], loss_coeffs=loss_coeffs, epoch_num=i)
             val_epochs.append(i)
 
             # Unpack validation metrics
@@ -660,11 +517,19 @@ for i in range(start_epoch, n_epochs+1):
 
     if i%args.save_freq == 0 and i > 0:
         checkpoint = {
-        'state_dict': hydranet_model.state_dict(),
-        'epoch': i,
-        }
+            'state_dict': hydranet_model.state_dict(),  # Model weights
+            'epoch': i,  # Save the current epoch
+            'optimizer_encoder': optimizer_encoder.state_dict(),  # Save encoder optimizer state
+            'optimizer_decoder': optimizer_decoder.state_dict(),  # Save decoder optimizer state
+            'scheduler_encoder': cas_scheduler_enc.__dict__,  # Save encoder scheduler state
+            'scheduler_decoder': cas_scheduler_dec.__dict__,  # Save decoder scheduler state
+            'optimizer_sigma_seg': optimizer_sigma_seg.state_dict(),  # Save sigma_seg optimizer state
+            'optimizer_sigma_depth': optimizer_sigma_depth.state_dict(),  # Save sigma_depth optimizer state
+            #'scheduler_sigma_seg': cas_scheduler_sigma_seg.__dict__,  # Save sigma_seg scheduler state
+            #'scheduler_sigma_depth': cas_scheduler_sigma_depth.__dict__,  # Save sigma_depth scheduler state
+        }        
         torch.save(checkpoint, args.out_chkpt_file)
-        np.savez("metrics_loss_data.npz",
+        np.savez(args.load_metric_file,
                 train_losses=train_losses,
                 val_losses=val_losses,
                 val_epochs=val_epochs,
@@ -674,7 +539,9 @@ for i in range(start_epoch, n_epochs+1):
         with open("learning_rate_log.txt", "a") as f:
             current_lr_enc = optimizer_encoder.param_groups[0]['lr']
             current_lr_dec = optimizer_decoder.param_groups[0]['lr']
-            f.write(f"Epoch {i}: Encoder LR = {current_lr_enc}, Decoder LR = {current_lr_dec}\n")
+            current_lr_sigma_seg = optimizer_sigma_seg.param_groups[0]['lr']
+            current_lr_sigma_depth = optimizer_sigma_depth.param_groups[0]['lr']
+            f.write(f"Epoch {i}: Encoder LR = {current_lr_enc}, Decoder LR = {current_lr_dec}, Sigma Seg Learning Rate: {current_lr_sigma_seg:.6f}, Sigma Depth Learning Rate: {current_lr_sigma_depth:.6f}\n")
 
 
 

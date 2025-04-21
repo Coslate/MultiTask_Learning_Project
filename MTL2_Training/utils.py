@@ -270,3 +270,16 @@ class InvHuberLoss(nn.Module):
         mask_err2 = err > c
         cost = torch.mean(err * mask_err.float() + err2 * mask_err2.float())
         return cost
+
+def get_param_groups(model):
+    encoder_params = []
+    decoder_params = []
+    segm_head_params = []
+    for name, param in model.named_parameters():
+        if "layer" in name or "final_conv" in name:
+            encoder_params.append(param)
+        elif "segm" in name:  # specifically for segm head
+            segm_head_params.append(param)
+        else:
+            decoder_params.append(param)
+    return encoder_params, decoder_params, segm_head_params

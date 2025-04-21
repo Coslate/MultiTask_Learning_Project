@@ -24,7 +24,7 @@ def convbnrelu(in_channels, out_channels, kernel_size, stride=1, groups=1, act=T
     if act:
         return nn.Sequential(nn.Conv2d(in_channels, out_channels, kernel_size, stride=stride, padding=int(kernel_size / 2.), groups=groups, bias=False),
                              batchnorm(out_channels),
-                             nn.ReLU6(inplace=True))
+                             nn.ReLU6(inplace=False))
     else:
         return nn.Sequential(nn.Conv2d(in_channels, out_channels, kernel_size, stride=stride, padding=int(kernel_size / 2.), groups=groups, bias=False),
                              batchnorm(out_channels))
@@ -137,7 +137,7 @@ class HydraNet(nn.Module):
         self.depth = conv3x3(256, 1, bias=True)# Define the Final layer of Depth
         self.pre_segm = conv1x1(256, 256, groups=256, bias=False)#: Call the Purple Pre-Head for Segm
         self.segm = conv3x3(256, self.num_classes, bias=True)#: Define the Final layer of Segmentation
-        self.relu = nn.ReLU6(inplace=True)#: Define a RELU 6 Operation
+        self.relu = nn.ReLU6(inplace=False)#: Define a RELU 6 Operation
 
         if self.num_tasks == 3:
             # Create a Normal Head
@@ -166,7 +166,7 @@ class HydraNet(nn.Module):
             init.constant_(m.weight, 1)
             init.constant_(m.bias, 0)              
 
-    def extract_encoder(self):
+    def extract_encoder(self, init=False):
         """ Returns only the encoder part of the HydraNet """
         encoder_layers = [
             self.layer1,
@@ -179,7 +179,8 @@ class HydraNet(nn.Module):
             self.layer8
             #self.final_conv  # 🔹 Include the new expansion layer (320 → 1280)
         ]
-        self.apply(self._initialize_weights)
+        if init:
+            self.apply(self._initialize_weights)
         return nn.Sequential(*encoder_layers)            
 
     def forward(self, x):
@@ -193,7 +194,7 @@ class HydraNet(nn.Module):
         l7 = self.layer7(l6) # 160, x / 32
         l8 = self.layer8(l7) # 320, x / 32
         ## 🔹 Apply Final Expansion Layer (320 → 1280 Channels)
-        #l8 = self.final_conv(l8)        
+        #l8 = self.final_conv(l8) # 1280, x / 32
 
         # LIGHT-WEIGHT REFINENET
         l8 = self.conv8(l8)

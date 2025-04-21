@@ -120,7 +120,7 @@ class Saver:
             return False
         return False
 
-    def maybe_load(self, ckpt_path, keys_to_load):
+    def maybe_load(self, ckpt_path, keys_to_load, ret_ckpt=False):
         """Loads existing checkpoint if exists.
         Args:
           ckpt_path (str): path to the checkpoint.
@@ -138,7 +138,11 @@ class Saver:
                 self.best_val = make_list(val)
                 self.logger.info(f" Found checkpoint with best values {self.best_val}")
             loaded.append(val)
-        return loaded
+
+        if ret_ckpt:
+            return loaded, ckpt
+        else:
+            return loaded
 
     @staticmethod
     def serialise(x):

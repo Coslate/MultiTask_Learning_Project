@@ -270,3 +270,30 @@ class InvHuberLoss(nn.Module):
         mask_err2 = err > c
         cost = torch.mean(err * mask_err.float() + err2 * mask_err2.float())
         return cost
+
+def spatial_jitter_loss(z, mode='L2'):
+    loss = 0
+    B, C, H, W = z.shape
+    for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1)]:  # 4-connected neighbors
+        shifted = torch.roll(z, shifts=(dx, dy), dims=(2, 3))
+        if mode == 'L2':
+            loss += F.mse_loss(z, shifted)
+    return loss / 4
+
+def variance_loss(z):
+    """
+    Encourages feature channels to have std ≥ 1 to avoid collapse (like VICReg).
+    z: (B, C, H, W)
+    """
+    std = z.std(dim=(0, 2, 3))  # Channel-wise std across batch & spatial
+    return torch.mean(F.relu(1.0 - std))  # Penalize std < 1
+
+def get_params(model):
+    encoder_params = []
+    decoder_params = []
+    for name, param in model.named_parameters():
+        if "layer" in name:  # Encoder layers
+            encoder_params.append(param)
+        else:  # Decoder layers
+            decoder_params.append(param)
+    return encoder_params, decoder_params
