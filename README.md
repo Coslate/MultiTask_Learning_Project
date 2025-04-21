@@ -1,5 +1,5 @@
 
-# HydraNet: Multi-Task Learning with Pretrained Encoder & Decoder
+# HydraNet: Multi-Task Learning with Pretrained Encoder and Decoder
 
 This project implements a multi-task learning pipeline on the NYUv2 dataset using:
 
@@ -24,23 +24,44 @@ This project implements a multi-task learning pipeline on the NYUv2 dataset usin
 ## 📁 Directory Overview
 
 ```
-.
-├── hydranet.py              # HydraNet model
-├── autoencoder.py           # HydraAutoencoder for pretraining decoder
-├── simclr.py                # SimCLR encoder pretraining
-├── main.py                  # Multi-task training entry point
-├── scheduler.py             # Custom learning rate schedulers
-├── dataset.py               # NYUv2 dataset and transforms
-├── utils.py                 # Losses, metrics, visualization helpers
-├── train_list_depth.txt     # Training file list
-├── val_list_depth.txt       # Validation file list
-├── test_list_depth.txt      # Testing file list
-├── cmap_nyud.npy            # Color map for segmentation visualization
-├── baseline_result/*.pth.tar                # Checkpoint files
-├── baseline_result/*.npz                    # Metric history files
-└── baseline_result/training_validation_loss.png / miou_rmse_metrics.png
+MTL1_Pretrained_Model
+├── autoencoder.py            # HydraAutoencoder for decoder pretraining
+├── simclr.py                 # SimCLR encoder pretraining
+├── hydranet.py               # HydraNet model architecture
+├── scheduler.py              # Learning rate schedulers
+├── dataset.py                # Dataset handling (NYUv2)
+├── utils.py                  # Losses, metrics, and visualizations
+├── model_helpers.py          # Model loading, saving utilities
+├── train_list_depth.txt      # Training split
+├── val_list_depth.txt        # Validation split
+├── test_list_depth.txt       # Testing split
+├── cmap_nyud.npy             # Color map for segmentation
+├── req.txt                   # Python environment dependencies
+├── pretrained_autocoder_main.py # Script for autoencoder training
+├── args.json                 # Arguments for reproducibility
+├── baseline_result/          # Stores pretrained checkpoints & metric logs
+└── weights/                  # Pretrained weights
 ```
 
+```
+MTL2_Training
+```
+├── main.py                  # Fine-tuning entry point
+├── hydranet.py              # Full HydraNet model
+├── dataset.py               # Dataset loading and transforms
+├── scheduler.py             # Cosine annealing + warmup
+├── utils.py                 # Metric functions (mIoU, RMSE)
+├── model_helpers.py         # Checkpoint management
+├── merge_shuff.py           # Data splitting utility
+├── args.json                # Training arguments
+├── weights/                 # Contains pretrained encoder & decoder
+├── baseline_result/         # Logs: training_loss, miou, rmse
+├── cmap_nyud.npy            # Color palette
+├── train_list_depth.txt     # Training split
+├── val_list_depth.txt       # Validation split
+├── test_list_depth.txt      # Testing split
+├── download_dataset.sh      # Auto-download NYUv2 dataset
+```
 ---
 
 ## 🛠️ Setup
