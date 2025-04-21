@@ -45,7 +45,6 @@ MTL1_Pretrained_Model
 
 ```
 MTL2_Training
-```
 ├── main.py                  # Fine-tuning entry point
 ├── hydranet.py              # Full HydraNet model
 ├── dataset.py               # Dataset loading and transforms
