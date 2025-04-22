@@ -11,7 +11,7 @@ This project implements a multi-task learning pipeline on the NYUv2 dataset usin
 
 ---
 
-## 🧠 Features
+## Features
 
 - Lightweight MobileNetV2 encoder
 - Efficient RefineNet-style decoder
@@ -21,7 +21,7 @@ This project implements a multi-task learning pipeline on the NYUv2 dataset usin
 
 ---
 
-## 📁 Directory Overview
+## Directory Overview
 
 ```
 MTL1_Pretrained_Model
@@ -63,7 +63,7 @@ MTL2_Training
 ```
 ---
 
-## 🛠️ Setup
+## Setup
 
 **Requirements:**
 
@@ -78,7 +78,7 @@ conda env create -f environment.yml
 
 ---
 
-## 🧪 Pretraining
+## Pretraining
 
 ### 1. Pretrain Encoder (SimCLR)
 
@@ -114,7 +114,7 @@ Under folder `baseline_result`:
 
 ---
 
-## 🧪 Evaluation Metrics
+## Evaluation Metrics
 
 | Metric | Description        |
 |--------|--------------------|
@@ -123,13 +123,13 @@ Under folder `baseline_result`:
 
 ---
 
-## 📌 Notes
+## Notes
 
 - Segmentation: `num_classes=40`
-- You can freeze the encoder for the first 200 epochs via:
+- You can freeze the encoder for the first 200 epochs via setting --freeze_enc_epoch 200:
 
 ```python
-if epoch < 200:
+if epoch < args.freeze_enc_epoch:
     freeze_encoder()
 ```
 
@@ -137,7 +137,7 @@ Adjust based on loss curves or encoder drift.
 
 ---
 
-## 🧾 Citation
+## Citation
 
 ```bibtex
 @inproceedings{kendall2018multi,
