@@ -68,8 +68,8 @@ def get_args_parser():
     parser.add_argument('--load_init', default=0, type=int)
     parser.add_argument('--load_pretrained', default=0, type=int)
     parser.add_argument('--load_resume', default=1, type=int)
-    parser.add_argument('--init_chkpt_file_enc', default='./pretrained_hydranet_encoder.320_256.multiscale_dense.pth.tar', type=str)
-    parser.add_argument('--init_chkpt_file_dec', default='./pretrained_hydranet_decoder.autoencoder.pth.tar', type=str)
+    parser.add_argument('--init_chkpt_file_enc', default=None, type=str)
+    parser.add_argument('--init_chkpt_file_dec', default=None, type=str)
     parser.add_argument('--out_chkpt_file', default='./checkpoint.pth.tar', type=str)
     parser.add_argument('--load_metric_file', default='./metrics_loss_data.npz', type=str)
     parser.add_argument('--train_ratio', default=0.9, type=float)
@@ -78,6 +78,7 @@ def get_args_parser():
     parser.add_argument('--shuffle_dataset', default=0, type=int)
     parser.add_argument('--val_every', default=100, type=int)
     parser.add_argument('--freeze_enc_epoch', default=500, type=int)
+    parser.add_argument('--output_dir', default='./outputs', type=str)
     return parser    
 
 
@@ -87,6 +88,7 @@ args = parser.parse_args()
 depth = sorted(glob.glob("./nyud/depth/*.png"))
 seg = sorted(glob.glob("./nyud/masks/*.png"))
 images = sorted(glob.glob("./nyud/rgb/*.png"))
+os.makedirs(args.output_dir, exist_ok=True)
 
 # ============= Dataset & Dataloader ================#
 img_scale = 1.0 / 255
@@ -149,6 +151,7 @@ comp_fns = [operator.gt, operator.lt]
 saver = Saver(
     args=locals(),
     ckpt_file=args.out_chkpt_file,
+    output_dir=args.output_dir,
     best_val=init_vals,
     condition=comp_fns,
     save_several_mode=all,
@@ -156,7 +159,7 @@ saver = Saver(
 
 # ============= Model Instance ================#
 num_classes, num_tasks = 40, 2
-hydranet_model = HydraNet(num_classes=num_classes, num_tasks=num_tasks)
+hydranet_model = HydraNet(num_classes=num_classes, num_tasks=num_tasks, init_head=True)
 #hydranet = nn.DataParallel(nn.Sequential(encoder, decoder).cuda()) # Use .cpu() if you prefer a slow death
 
 if torch.cuda.is_available():
@@ -253,57 +256,111 @@ elif args.load_resume == 1:
     val_epochs = list(loaded_data["val_epochs"])
     mean_iou_values = list(loaded_data["mean_iou_values"])
     rmse_values = list(loaded_data["rmse_values"])
+else:
+    train_losses = []
+    val_losses = []
+    val_epochs = []
+    mean_iou_values = []
+    rmse_values = []
+    start_epoch = None
 
 if args.load_init == 1 and args.load_pretrained == 1 and args.load_resume == 0:
     # Load encoder weights
-    encoder_ckpt = torch.load(args.init_chkpt_file_enc)
-    encoder_state_dict = encoder_ckpt['state_dict'] if 'state_dict' in encoder_ckpt else encoder_ckpt
+    if args.init_chkpt_file_enc is not None:
+        encoder_ckpt = torch.load(args.init_chkpt_file_enc)
+        encoder_state_dict = encoder_ckpt['state_dict'] if 'state_dict' in encoder_ckpt else encoder_ckpt
 
-    # Filter only keys related to 'layer' blocks (layer1 - layer8)
-    encoder_state_dict_filtered = {
-        k: v for k, v in encoder_state_dict.items()
-        if k.startswith("layer") or k.startswith("final_conv")
-    }
+        # Normalize key names
+        if any(k.startswith("encoder.layer") for k in encoder_state_dict):
+            print("Detected SimCLR-style keys with 'encoder.' prefix")
+            encoder_state_dict = {
+                k.replace("encoder.", ""): v for k, v in encoder_state_dict.items()
+            }
 
-    # Load weights into HydraNet encoder
-    hydranet_encoder = hydranet_model.extract_encoder(init=False)
-    load_state_dict(hydranet_encoder, encoder_state_dict_filtered, strict=False)
-    print("Encoder weights loaded from:", args.init_chkpt_file_enc)
+        # Only retain encoder keys
+        encoder_keys = [k for k in hydranet_model.state_dict() if k.startswith("layer") or k.startswith("final_conv")]
+        encoder_state_dict_filtered = {
+            k: v for k, v in encoder_state_dict.items() if k in encoder_keys
+        }
 
-    # Load decoder weights
-    # Load the full checkpoint state_dict (no 'state_dict' key wrapper)
-    decoder_ckpt = torch.load(args.init_chkpt_file_dec)  # path to pretrained_full.autoencoder.pth.tar
+        # Load into full model (not .extract_encoder())
+        load_state_dict(hydranet_model, encoder_state_dict_filtered, strict=False)
+        print("Encoder weights loaded from:", args.init_chkpt_file_enc)        
 
-    # Get encoder keys from a clean HydraNet instance
-    encoder_keys = hydranet_model.extract_encoder(init=False).state_dict().keys()
+    if args.init_chkpt_file_dec is not None:
+        # Load decoder weights
+        # Load the full checkpoint state_dict (no 'state_dict' key wrapper)
+        decoder_ckpt = torch.load(args.init_chkpt_file_dec)  # path to pretrained_full.autoencoder.pth.tar
 
-    # Filter only decoder weights
-    decoder_state_dict = {
-        k: v for k, v in decoder_ckpt.items()
-        if k not in encoder_keys and not k.startswith("segm.")
-    }    
+        # Get encoder keys from a clean HydraNet instance
+        encoder_keys = hydranet_model.extract_encoder(init=False).state_dict().keys()
 
-    # Load them into the full HydraNet model
-    load_state_dict(hydranet_model, decoder_state_dict, strict=False)
-    print("Decoder weights loaded from:", args.init_chkpt_file_dec)
+        # Filter only decoder weights
+        decoder_state_dict = {
+            k: v for k, v in decoder_ckpt.items()
+            if k not in encoder_keys and not k.startswith("segm.")
+        }    
 
-    print("Model has {} parameters".format(sum([p.numel() for p in hydranet_model.parameters()])))    
+        # Load them into the full HydraNet model
+        load_state_dict(hydranet_model, decoder_state_dict, strict=False)
+        print("Decoder weights loaded from:", args.init_chkpt_file_dec)
 
-    #-----------Check if Missing Key-----------#
-    loaded_keys = set(list(encoder_state_dict_filtered.keys()) + list(decoder_state_dict.keys()))
-    model_keys = set(hydranet_model.state_dict().keys())
+        print("Model has {} parameters".format(sum([p.numel() for p in hydranet_model.parameters()])))    
 
-    missing_keys = sorted(list(model_keys - loaded_keys))
-    unexpected_keys = sorted(list(loaded_keys - model_keys))
+    if args.init_chkpt_file_dec is not None and args.init_chkpt_file_enc is not None:
+        #-----------Check if Missing Key-----------#
+        loaded_keys = set(list(encoder_state_dict_filtered.keys()) + list(decoder_state_dict.keys()))
+        model_keys = set(hydranet_model.state_dict().keys())
 
-    print(f"\n Total model keys: {len(model_keys)}")
-    print(f"Missing keys (expected by model but not found in loaded weights): {len(missing_keys)}")
-    for k in missing_keys:
-        print(f"  - {k}")
+        missing_keys = sorted(list(model_keys - loaded_keys))
+        unexpected_keys = sorted(list(loaded_keys - model_keys))
 
-    print(f"\nUnexpected keys (found in loaded weights but not used in model): {len(unexpected_keys)}")
-    for k in unexpected_keys:
-        print(f"  - {k}")    
+        print(f"\n Total model keys: {len(model_keys)}")
+        print(f"Missing keys (expected by model but not found in loaded weights): {len(missing_keys)}")
+        for k in missing_keys:
+            print(f"  - {k}")
+
+        print(f"\nUnexpected keys (found in loaded weights but not used in model): {len(unexpected_keys)}")
+        for k in unexpected_keys:
+            print(f"  - {k}")    
+    elif args.init_chkpt_file_enc is not None:
+        #-----------Check if Missing Key-----------#
+        loaded_keys = set(list(encoder_state_dict_filtered.keys()))
+        model_keys = set(hydranet_model.extract_encoder(init=False).state_dict().keys())
+        model_keys = set(k for k in hydranet_model.state_dict().keys() if k.startswith("layer") or k.startswith("final_conv"))
+
+        missing_keys = sorted(list(model_keys - loaded_keys))
+        unexpected_keys = sorted(list(loaded_keys - model_keys))
+
+        print(f"\n Total model keys: {len(model_keys)}")
+        print(f"Missing keys (expected by model but not found in loaded weights): {len(missing_keys)}")
+        for k in missing_keys:
+            print(f"  - {k}")
+
+        print(f"\nUnexpected keys (found in loaded weights but not used in model): {len(unexpected_keys)}")
+        for k in unexpected_keys:
+            print(f"  - {k}")
+
+    elif args.init_chkpt_file_dec is not None:
+        #-----------Check if Missing Key-----------#
+        loaded_keys = set(list(decoder_state_dict.keys()))
+        model_keys = set(
+            k for k in hydranet_model.state_dict().keys()
+            if not (k.startswith("layer") or k.startswith("final_conv"))
+        )
+
+        missing_keys = sorted(list(model_keys - loaded_keys))
+        unexpected_keys = sorted(list(loaded_keys - model_keys))
+
+        print(f"\n Total model keys: {len(model_keys)}")
+        print(f"Missing keys (expected by model but not found in loaded weights): {len(missing_keys)}")
+        for k in missing_keys:
+            print(f"  - {k}")
+
+        print(f"\nUnexpected keys (found in loaded weights but not used in model): {len(unexpected_keys)}")
+        for k in unexpected_keys:
+            print(f"  - {k}")    
+    
 elif args.load_init == 1 and args.load_pretrained == 0 and args.load_resume == 0: #Load third-party pretrained
     # If the pretrained model has different num_classs in segm head, remove the segmentation head weights (since the number of classes changed)
     start_epoch, _, state_dict = saver.maybe_load(ckpt_path=ckpt_path, keys_to_load=["epoch", "best_val", "state_dict"], ret_ckpt=False)
@@ -345,11 +402,12 @@ for name, module in hydranet_model.named_modules():
 """
 
 # Freeze encoder layers (optional)
-for name, param in hydranet_model.named_parameters():
-    if name.startswith("layer") or name.startswith("final_conv"):  # Freeze encoder layers and final_conv
-        param.requires_grad = False
-    else:
-        param.requires_grad = True  # Keep decoder layers trainable
+if args.freeze_enc_epoch > 0:
+    for name, param in hydranet_model.named_parameters():
+        if name.startswith("layer") or name.startswith("final_conv"):  # Freeze encoder layers and final_conv
+            param.requires_grad = False
+        else:
+            param.requires_grad = True  # Keep decoder layers trainable
 
 print("Encoder weights loaded, decoder weights initialized, and encoder frozen.")
 for name, param in hydranet_model.named_parameters():
@@ -472,6 +530,7 @@ def validate(model, metrics, dataloader, val_losses, crits, loss_coeffs, epoch_n
 loss_coeffs = (0.5, 0.5)
 
 print(f"start_epoch = {start_epoch}")
+frozen_set = False
 for i in range(start_epoch, n_epochs):
     cas_scheduler_enc.step(i)
     cas_scheduler_dec.step(i)
@@ -479,13 +538,15 @@ for i in range(start_epoch, n_epochs):
     #cas_scheduler_sigma_depth.step(i)
 
     # === Conditional Encoder Freezing ===
-    if i < args.freeze_enc_epoch:
-        for name, param in hydranet_model.named_parameters():
-            if name.startswith("layer"):  # Freeze encoder
-                param.requires_grad = False
-    else:
-        for name, param in hydranet_model.named_parameters():
-            param.requires_grad = True  # Unfreeze all
+    if args.freeze_enc_epoch > 0 and frozen_set == False:
+        if i < args.freeze_enc_epoch:
+            for name, param in hydranet_model.named_parameters():
+                if name.startswith("layer"):  # Freeze encoder
+                    param.requires_grad = False
+        else:
+            for name, param in hydranet_model.named_parameters():
+                param.requires_grad = True  # Unfreeze all
+            frozen_set = True
 
     # Optional: print info
     if i in [0, 199, 200, 300, 500, 501]:
@@ -513,7 +574,8 @@ for i in range(start_epoch, n_epochs):
             mean_iou_values.append(mean_iou)
             rmse_values.append(rmse)            
 
-        saver.maybe_save(new_val=vals, dict_to_save={"state_dict": hydranet_model.state_dict(), "epoch": i})
+            saver.maybe_save(new_val=[mean_iou], dict_to_save={"state_dict": hydranet_model.state_dict(), "epoch": i})
+            #saver.maybe_save(new_val=vals, dict_to_save={"state_dict": hydranet_model.state_dict(), "epoch": i})
 
     if i%args.save_freq == 0 and i > 0:
         checkpoint = {
@@ -528,7 +590,11 @@ for i in range(start_epoch, n_epochs):
             #'scheduler_sigma_seg': cas_scheduler_sigma_seg.__dict__,  # Save sigma_seg scheduler state
             #'scheduler_sigma_depth': cas_scheduler_sigma_depth.__dict__,  # Save sigma_depth scheduler state
         }        
-        torch.save(checkpoint, args.out_chkpt_file)
+        base_chkpt_file_name = os.path.basename(args.out_chkpt_file)
+        base_metric_file_name = os.path.basename(args.load_metric_file)
+        save_ckpt_file = os.path.join(args.output_dir, base_chkpt_file_name)
+        save_metric_file = os.path.join(args.output_dir, base_metric_file_name)
+        torch.save(checkpoint, save_ckpt_file)
         np.savez(args.load_metric_file,
                 train_losses=train_losses,
                 val_losses=val_losses,
@@ -536,7 +602,7 @@ for i in range(start_epoch, n_epochs):
                 mean_iou_values=mean_iou_values,
                 rmse_values=rmse_values)
         # Open the file in append mode
-        with open("learning_rate_log.txt", "a") as f:
+        with open(f"{os.path.join(args.output_dir, 'learning_rate_log.txt')}", "a") as f:
             current_lr_enc = optimizer_encoder.param_groups[0]['lr']
             current_lr_dec = optimizer_decoder.param_groups[0]['lr']
             current_lr_sigma_seg = optimizer_sigma_seg.param_groups[0]['lr']
@@ -563,7 +629,8 @@ plt.legend()
 plt.grid(True)
 
 # Save plot
-plt.savefig("training_validation_loss.png", dpi=300, bbox_inches='tight')
+save_loss_file = os.path.join(args.output_dir, "training_validation_loss.png")
+plt.savefig(f"{save_loss_file}", dpi=300, bbox_inches='tight')
 plt.close()  # Close the figure to free memory
 
 # === Save Mean IoU & RMSE Plot ===
@@ -582,5 +649,6 @@ plt.legend()
 plt.grid(True)
 
 # Save plot
-plt.savefig("miou_rmse_metrics.png", dpi=300, bbox_inches='tight')
+save_metric_png = os.path.join(args.output_dir, "miou_rmse_metrics.png")
+plt.savefig(f"{save_metric_png}", dpi=300, bbox_inches='tight')
 plt.close()

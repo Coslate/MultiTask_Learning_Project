@@ -45,6 +45,7 @@ class Saver:
         self,
         args,
         ckpt_file,
+        output_dir,
         best_val=0,
         condition=lambda x, y: x > y,
         save_interval=100,
@@ -53,7 +54,8 @@ class Saver:
         """
         Args:
             args (dict): dictionary with arguments.
-            ckpt_dir (str): file to directory in which to store the checkpoint.
+            ckpt_file (str): file to directory in which to load the checkpoint.
+            output_dir (str): directory in which to store the checkpoint.
             best_val (float or list of floats): initial best value.
             condition (function or list of functions): how to decide whether to save
                                                        the new checkpoint by comparing
@@ -62,7 +64,7 @@ class Saver:
             save_several_mode (any or all): if there are multiple savers, how to trigger
                                             the saving.
         """
-        ckpt_dir = os.path.dirname(ckpt_file)
+        ckpt_dir = os.path.dirname(output_dir)
         if save_several_mode not in [all, any]:
             raise ValueError(
                 f"save_several_mode must be either all or any, got {save_several_mode}"
