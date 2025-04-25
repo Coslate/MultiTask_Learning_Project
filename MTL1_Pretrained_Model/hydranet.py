@@ -87,7 +87,7 @@ class CRPBlock(nn.Module):
 
 class HydraNet(nn.Module):
     """Net Definition"""
-    def __init__(self, in_channels=32, num_classes=6, num_tasks=2, agg_size=256, n_crp=4):
+    def __init__(self, in_channels=32, num_classes=6, num_tasks=2, init_head=False):
         super().__init__()
         self.num_tasks = num_tasks
         self.num_classes = num_classes
@@ -139,10 +139,28 @@ class HydraNet(nn.Module):
         self.segm = conv3x3(256, self.num_classes, bias=True)#: Define the Final layer of Segmentation
         self.relu = nn.ReLU6(inplace=False)#: Define a RELU 6 Operation
 
+        if init_head:
+            self.kaiming_init_head(self.pre_depth)
+            self.kaiming_init_head(self.pre_segm)
+            self.kaiming_init_head(self.depth)
+            self.kaiming_init_head(self.segm)
+
         if self.num_tasks == 3:
             # Create a Normal Head
             self.pre_normal = conv1x1(256, 256, groups=256, bias=False)
             self.normal = conv3x3(256, 3, bias=True)
+
+            if init_head:
+                self.kaiming_init_head(self.pre_normal)
+                self.kaiming_init_head(self.normal)
+
+    # === Kaiming Initialization for heads ===
+    def kaiming_init_head(self, head):
+        for m in head.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)            
 
     @staticmethod
     def _initialize_weights(m):
@@ -182,6 +200,49 @@ class HydraNet(nn.Module):
         if init:
             self.apply(self._initialize_weights)
         return nn.Sequential(*encoder_layers)            
+
+    def extract_decoder(self, init=False):
+        """
+        Returns only the decoder part of the HydraNet (excluding MobileNetV2 encoder).
+        Useful for loading/saving decoder weights separately.
+        """
+        decoder_layers = nn.ModuleDict({
+            # 1x1 Convs for feature adaptation
+            "conv8": self.conv8,
+            "conv7": self.conv7,
+            "conv6": self.conv6,
+            "conv5": self.conv5,
+            "conv4": self.conv4,
+            "conv3": self.conv3,
+
+            # Chained Residual Pooling Blocks
+            "crp4": self.crp4,
+            "crp3": self.crp3,
+            "crp2": self.crp2,
+            "crp1": self.crp1,
+
+            # Adaptation layers
+            "conv_adapt4": self.conv_adapt4,
+            "conv_adapt3": self.conv_adapt3,
+            "conv_adapt2": self.conv_adapt2,
+
+            # Heads
+            "pre_segm": self.pre_segm,
+            "segm": self.segm,
+            "pre_depth": self.pre_depth,
+            "depth": self.depth
+        })
+
+        if self.num_tasks == 3:
+            decoder_layers.update({
+                "pre_normal": self.pre_normal,
+                "normal": self.normal,
+            })
+
+        if init:
+            decoder_layers.apply(self._initialize_weights)
+
+        return decoder_layers        
 
     def forward(self, x):
         # MOBILENET V2

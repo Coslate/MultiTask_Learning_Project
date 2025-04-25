@@ -25,7 +25,7 @@ def main():
     args = get_args()
 
     # Configs
-    test_file = './val_list_depth.txt'
+    test_file = './test_list_depth.txt'
     num_classes = 40
     num_tasks = 2
     batch_size = 4

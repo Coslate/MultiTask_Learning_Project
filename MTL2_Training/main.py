@@ -150,7 +150,7 @@ comp_fns = [operator.gt, operator.lt]
 
 saver = Saver(
     args=locals(),
-    ckpt_file=args.out_chkpt_file,
+    ckpt_file=os.path.join(args.output_dir, os.path.basename(args.out_chkpt_file)),
     output_dir=args.output_dir,
     best_val=init_vals,
     condition=comp_fns,
