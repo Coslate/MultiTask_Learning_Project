@@ -182,14 +182,14 @@ betas_encoder = (0.9, 0.99)
 betas_decoder = (0.9, 0.999)
 #momentum_encoder = 0.9
 #momentum_decoder = 0.9
-weight_decay_encoder = 1e-5
-weight_decay_decoder = 1e-5
+weight_decay_encoder = 2e-4
+weight_decay_decoder = 1e-4
 '''Adam'''
 # Extract encoder parameters (MobileNetV2)
 # Extract decoder parameters (RefineNet)
 encoder_params, decoder_params, segm_head_params = get_param_groups(hydranet_model)
-optimizer_encoder = torch.optim.Adam(encoder_params, lr=lr_encoder, betas=betas_encoder,weight_decay=weight_decay_encoder)
-optimizer_decoder = torch.optim.Adam([
+optimizer_encoder = torch.optim.AdamW(encoder_params, lr=lr_encoder, betas=betas_encoder,weight_decay=weight_decay_encoder)
+optimizer_decoder = torch.optim.AdamW([
     {'params': decoder_params, 'lr': lr_decoder},
     {'params': segm_head_params, 'lr': lr_decoder * 3},  # ← 3× higher LR for segm head
 ], betas=betas_decoder, weight_decay=weight_decay_decoder)
@@ -222,8 +222,8 @@ weight_decay_sigma_depth = 1e-5
 log_sigma_seg = nn.Parameter(torch.zeros(1, device=device), requires_grad=True)  # For segmentation
 log_sigma_depth = nn.Parameter(torch.zeros(1, device=device), requires_grad=True)  # For depth
 
-optimizer_sigma_seg = torch.optim.Adam([log_sigma_seg], lr=args.lr_sigma_seg, betas=betas_sigma_seg, weight_decay=weight_decay_sigma_seg)
-optimizer_sigma_depth = torch.optim.Adam([log_sigma_depth], lr=args.lr_sigma_depth, betas=betas_sigma_depth, weight_decay=weight_decay_sigma_depth)
+optimizer_sigma_seg = torch.optim.AdamW([log_sigma_seg], lr=args.lr_sigma_seg, betas=betas_sigma_seg, weight_decay=weight_decay_sigma_seg)
+optimizer_sigma_depth = torch.optim.AdamW([log_sigma_depth], lr=args.lr_sigma_depth, betas=betas_sigma_depth, weight_decay=weight_decay_sigma_depth)
 
 #cas_scheduler_sigma_seg = CustomScheduler(optimizer_sigma_seg, args.cas_warmup_steps_sigma_seg, total_steps, args.cas_min_lr_sigma_seg, args.lr_sigma_seg, args.cas_final_lr_sigma_seg, args.cas_T_0_sigma_seg, args.cas_T_mult_sigma_seg)    
 #cas_scheduler_sigma_depth = CustomScheduler(optimizer_sigma_depth, args.cas_warmup_steps_sigma_depth, total_steps, args.cas_min_lr_sigma_depth, args.lr_sigma_depth, args.cas_final_lr_sigma_depth, args.cas_T_0_sigma_depth, args.cas_T_mult_sigma_depth)    
@@ -366,12 +366,14 @@ elif args.load_init == 1 and args.load_pretrained == 0 and args.load_resume == 0
     start_epoch, _, state_dict = saver.maybe_load(ckpt_path=ckpt_path, keys_to_load=["epoch", "best_val", "state_dict"], ret_ckpt=False)
     filtered_state_dict = {k: v for k, v in state_dict.items() if "segm" not in k}
     load_state_dict(hydranet_model, filtered_state_dict)
+    print(f"Load third-party weights from {ckpt_path}")
     print("Model has {} parameters".format(sum([p.numel() for p in hydranet_model.parameters()])))
 elif args.load_resume == 1:
     # If the pretrained model has different num_classs in segm head, remove the segmentation head weights (since the number of classes changed)
     [start_epoch, _, state_dict], checkpoint = saver.maybe_load(ckpt_path=ckpt_path, keys_to_load=["epoch", "best_val", "state_dict"], ret_ckpt=True)
     filtered_state_dict = {k: v for k, v in state_dict.items() if "segm" not in k}
     load_state_dict(hydranet_model, filtered_state_dict)
+    print(f"Load resuming weights from {ckpt_path}")
     print("Model has {} parameters".format(sum([p.numel() for p in hydranet_model.parameters()])))
 
     # Restore the custom optimizer states
@@ -389,6 +391,8 @@ elif args.load_resume == 1:
     print(f"Restored Decoder LR: {optimizer_decoder.param_groups[0]['lr']}")
     print(f"Restored sigma_seg LR: {optimizer_sigma_seg.param_groups[0]['lr']}")
     print(f"Restored sigma_depth LR: {optimizer_sigma_depth.param_groups[0]['lr']}")
+elif args.load_init == 0 and args.load_pretrained == 0 and args.load_resume == 0:
+    print(f"No loading weights, random initialized weights.")
 
 # ================Weight Initialization===================#
 if start_epoch is None:
@@ -409,7 +413,6 @@ if args.freeze_enc_epoch > 0:
         else:
             param.requires_grad = True  # Keep decoder layers trainable
 
-print("Encoder weights loaded, decoder weights initialized, and encoder frozen.")
 for name, param in hydranet_model.named_parameters():
     print(f"{name}: {'Frozen' if not param.requires_grad else 'Trainable'}")
 

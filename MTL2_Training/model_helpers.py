@@ -64,7 +64,7 @@ class Saver:
             save_several_mode (any or all): if there are multiple savers, how to trigger
                                             the saving.
         """
-        ckpt_dir = os.path.dirname(output_dir)
+        ckpt_dir = output_dir
         if save_several_mode not in [all, any]:
             raise ValueError(
                 f"save_several_mode must be either all or any, got {save_several_mode}"
