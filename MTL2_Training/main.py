@@ -110,8 +110,8 @@ crop_size = min(img_w, img_h)
 
 transform_train = transforms.Compose([RandomMirror(), RandomCrop(crop_size)] + transform_common)
 transform_val = transforms.Compose(transform_common)
-train_batch_size = 4
-val_batch_size = 4
+train_batch_size = args.batch_size
+val_batch_size = args.batch_size
 train_file = "./train_list_depth.txt"
 val_file = "./val_list_depth.txt"
 test_file = "./test_list_depth.txt"
@@ -130,7 +130,7 @@ trainloader = DataLoader(HydranetDataset(train_file, transform_train),
 #VALIDATION DATALOADER
 valloader = DataLoader(HydranetDataset(val_file, transform_val),
                        batch_size=val_batch_size,
-                       shuffle=True,
+                       shuffle=False,
                        num_workers=args.num_workers,
                        pin_memory=True,
                        drop_last=False)
