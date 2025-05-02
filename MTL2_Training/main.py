@@ -79,6 +79,7 @@ def get_args_parser():
     parser.add_argument('--val_every', default=100, type=int)
     parser.add_argument('--freeze_enc_epoch', default=500, type=int)
     parser.add_argument('--output_dir', default='./outputs', type=str)
+    parser.add_argument("--final_linear_decay", action="store_true", help="Whether to do linear decay after cosin annealing.")
     return parser    
 
 
@@ -209,8 +210,8 @@ T_0_dec = args.cas_T_0_dec
 T_mult_enc = args.cas_T_mult_enc
 T_mult_dec = args.cas_T_mult_dec
 
-cas_scheduler_enc = CustomScheduler(optimizer_encoder, warmup_steps_enc, total_steps, min_lr_enc, learning_rate_enc, final_lr_enc, T_0_enc, T_mult_enc)    
-cas_scheduler_dec = CustomScheduler(optimizer_decoder, warmup_steps_dec, total_steps, min_lr_dec, learning_rate_dec, final_lr_dec, T_0_dec, T_mult_dec)
+cas_scheduler_enc = CustomScheduler(optimizer_encoder, warmup_steps_enc, total_steps, min_lr_enc, learning_rate_enc, final_lr_enc, T_0_enc, T_mult_enc, args.final_linear_decay)
+cas_scheduler_dec = CustomScheduler(optimizer_decoder, warmup_steps_dec, total_steps, min_lr_dec, learning_rate_dec, final_lr_dec, T_0_dec, T_mult_dec, args.final_linear_decay)
 
 # ================Learnable Uncertainty Weighting (Kendall et al., 2018)===================#
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -235,6 +236,9 @@ if args.load_init == 1 and args.load_pretrained == 1:
     val_epochs = []
     mean_iou_values = []
     rmse_values = []
+    lr_values_dec = []
+    lr_values_enc = []
+    grad_norms = []
     start_epoch = None
 elif args.load_init == 1 and args.load_pretrained == 0:
     ckpt_path = './weights/ExpKITTI_joint.ckpt'
@@ -243,6 +247,9 @@ elif args.load_init == 1 and args.load_pretrained == 0:
     val_epochs = []
     mean_iou_values = []
     rmse_values = []
+    lr_values_dec = []
+    lr_values_enc = []
+    grad_norms = []
     start_epoch = None
 elif args.load_resume == 1:
     ckpt_path = args.out_chkpt_file
@@ -256,12 +263,18 @@ elif args.load_resume == 1:
     val_epochs = list(loaded_data["val_epochs"])
     mean_iou_values = list(loaded_data["mean_iou_values"])
     rmse_values = list(loaded_data["rmse_values"])
+    lr_values_dec = list(loaded_data['lr_values_dec'])
+    lr_values_enc = list(loaded_data['lr_values_enc'])
+    grad_norms = list(loaded_data['grad_norms'])
 else:
     train_losses = []
     val_losses = []
     val_epochs = []
     mean_iou_values = []
     rmse_values = []
+    lr_values_dec = []
+    lr_values_enc = []
+    grad_norms = []
     start_epoch = None
 
 if args.load_init == 1 and args.load_pretrained == 1 and args.load_resume == 0:
@@ -565,6 +578,22 @@ for i in range(start_epoch, n_epochs):
     
     train(model=hydranet_model, opts=[optimizer_encoder, optimizer_decoder, optimizer_sigma_seg, optimizer_sigma_depth], crits=[crit_segm, crit_depth], dataloader=trainloader, train_losses=train_losses, loss_coeffs=loss_coeffs, grad_norm=0.0)
 
+
+    # Track LR
+    current_lr_dec = cas_scheduler_dec.get_last_lr()[0]
+    lr_values_dec.append(current_lr_dec)
+    current_lr_enc = cas_scheduler_enc.get_last_lr()[0]
+    lr_values_enc.append(current_lr_dec)
+
+    # Track Grad Norm
+    total_norm = 0.0
+    for p in hydranet_model.parameters():
+        if p.grad is not None:
+            param_norm = p.grad.data.norm(2)
+            total_norm += param_norm.item() ** 2
+    total_norm = total_norm ** 0.5
+    grad_norms.append(total_norm)
+
     if i%args.val_every == 0:
         metrics = [MeanIoU(num_classes), RMSE(ignore_val=ignore_depth)]
 
@@ -603,7 +632,11 @@ for i in range(start_epoch, n_epochs):
                 val_losses=val_losses,
                 val_epochs=val_epochs,
                 mean_iou_values=mean_iou_values,
-                rmse_values=rmse_values)
+                rmse_values=rmse_values,
+                lr_values_dec=lr_values_dec,
+                lr_values_enc=lr_values_enc,
+                grad_norms=grad_norms
+                )
         # Open the file in append mode
         with open(f"{os.path.join(args.output_dir, 'learning_rate_log.txt')}", "a") as f:
             current_lr_enc = optimizer_encoder.param_groups[0]['lr']
@@ -620,38 +653,54 @@ epochs = list(range(1, len(train_losses) + 1))
 # Interpolate validation losses to match every epoch
 val_interp = np.interp(epochs, val_epochs, val_losses)  
 
+# === Save Training/Validation Loss vs Epochs Plot===
 plt.figure(figsize=(8, 6))
 plt.plot(epochs, train_losses, label="Training Loss", color="blue", marker="o")
 plt.plot(val_epochs, val_losses, label="Validation Loss (Actual)", color="red", marker="s")
 plt.plot(epochs, val_interp, '--', color="red", alpha=0.5, label="Validation Loss (Interpolated)")
-
 plt.xlabel("Epochs")
 plt.ylabel("Loss")
 plt.title("Training and Validation Loss vs Epochs")
 plt.legend()
 plt.grid(True)
-
-# Save plot
 save_loss_file = os.path.join(args.output_dir, "training_validation_loss.png")
 plt.savefig(f"{save_loss_file}", dpi=300, bbox_inches='tight')
 plt.close()  # Close the figure to free memory
 
-# === Save Mean IoU & RMSE Plot ===
+# === Save Mean IoU/RMSE vs Epochs Plot ===
 plt.figure(figsize=(8, 6))
-
-# Plot Mean IoU
 plt.plot(val_epochs, mean_iou_values, label="Mean IoU", color="green", marker="o")
-
-# Plot RMSE
 plt.plot(val_epochs, rmse_values, label="RMSE", color="purple", marker="s")
-
 plt.xlabel("Epochs")
 plt.ylabel("Metric Value")
 plt.title("Validation Metrics (Mean IoU & RMSE) vs Epochs")
 plt.legend()
 plt.grid(True)
-
-# Save plot
 save_metric_png = os.path.join(args.output_dir, "miou_rmse_metrics.png")
 plt.savefig(f"{save_metric_png}", dpi=300, bbox_inches='tight')
 plt.close()
+
+# === Save LR vs Epochs Plot===
+plt.figure(figsize=(8, 6))
+plt.plot(epochs, lr_values_enc, label="Encoder Learning Rate", color="blue", marker="o")
+plt.plot(epochs, lr_values_dec, label="Decoder Learning Rate", color="green", marker="s")
+plt.xlabel("Epochs")
+plt.ylabel("Learning Rate")
+plt.title("Encoder/Decoder LR vs Epochs")
+plt.legend()
+plt.grid(True)
+save_loss_file = os.path.join(args.output_dir, "encoder_decoder_lr.png")
+plt.savefig(f"{save_loss_file}", dpi=300, bbox_inches='tight')
+plt.close()  # Close the figure to free memory
+
+# === Save Grad Norm vs Epochs Plot===
+plt.figure(figsize=(8, 6))
+plt.plot(epochs, grad_norms, label="Gradient Norms", color="red", marker="o")
+plt.xlabel("Epochs")
+plt.ylabel("Gradient L2 Norms")
+plt.title("Gradient L2 Norms vs Epochs")
+plt.legend()
+plt.grid(True)
+save_loss_file = os.path.join(args.output_dir, "gradoent_l2_norms.png")
+plt.savefig(f"{save_loss_file}", dpi=300, bbox_inches='tight')
+plt.close()  # Close the figure to free memory

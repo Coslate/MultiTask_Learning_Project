@@ -1,13 +1,13 @@
 import torch
 
 class CustomScheduler:
-    def __init__(self, optimizer, warmup_steps, total_steps, min_lr, max_lr, final_lr, T_0, T_mult):
+    def __init__(self, optimizer, warmup_steps, total_steps, min_lr, max_lr, final_lr, T_0, T_mult, final_linear_decay=False):
         """
         Custom Learning Rate Scheduler.
         
         - Warmup (Linear): Increases from min_lr to max_lr over `warmup_steps`
-        - Cosine Annealing: Decays from max_lr to mid-range (5e-4) until 8000 steps
-        - Final Linear Decay: Reduces from 5e-4 to final_lr over last 2000 steps
+        - Cosine Annealing: Decays from max_lr to mid-range
+        - Final Linear Decay: Reduces from mid-range to final_lr
 
         Args:
             optimizer: PyTorch optimizer
@@ -28,10 +28,13 @@ class CustomScheduler:
         self.T_mult = T_mult
         self.cos_anneal_stage = self.warmup_steps+self.T_0
         self.fin_mid_lr = (self.max_lr + self.min_lr)/2
+        self.fin_linear_decay = final_linear_decay
 
         # Cosine Annealing Phase (Mid-Phase: 5e-4 as transition point)
-        #self.cosine_scheduler = CosineAnnealingLR(optimizer, T_max=(8000 - warmup_steps), eta_min=5e-4)
-        self.cosine_scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=self.T_0, T_mult=self.T_mult, eta_min=self.min_lr)
+        if self.fin_linear_decay:
+            self.cosine_scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=self.T_0, T_mult=self.T_mult, eta_min=self.fin_mid_lr)
+        else:
+            self.cosine_scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=self.T_0, T_mult=self.T_mult, eta_min=self.min_lr)
 
     def step(self, step=None):
         if step is not None:
@@ -47,7 +50,7 @@ class CustomScheduler:
             # Cosine annealing decay
             self.cosine_scheduler.step()
             new_lr = self.cosine_scheduler.get_last_lr()[0]
-        else:
+        elif self.fin_linear_decay:
             # Final decay to stabilize learning
             progress = (self.current_step - self.cos_anneal_stage) / (self.total_steps - self.cos_anneal_stage)
             new_lr = self.fin_mid_lr + (self.final_lr - self.fin_mid_lr) * progress
@@ -55,6 +58,14 @@ class CustomScheduler:
         # Apply new learning rate
         for param_group in self.optimizer.param_groups:
             param_group['lr'] = new_lr
+
+    def state_dict(self):
+        return {
+            'current_step': self.current_step
+        }
+
+    def load_state_dict(self, state_dict):
+        self.current_step = state_dict.get('current_step', 0)            
 
     def get_last_lr(self):
         return [param_group['lr'] for param_group in self.optimizer.param_groups]
