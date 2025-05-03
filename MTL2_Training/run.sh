@@ -1,0 +1,19 @@
+#! /bin/sh -f
+
+
+# Train Command w/o learnable uncertainty weight loss
+CUDA_VISIBLE_DEVICES=4 python ./main.py --lr_enc 1e-4 --cas_min_lr_enc 8e-5 --cas_final_lr_enc 3e-6 --lr_dec 8e-4 --cas_min_lr_dec 9e-5 --cas_final_lr_dec 7e-6 --cas_warmup_steps_enc 50 --cas_warmup_steps_dec 180 --max_iter 2301 --cas_T_0_enc 2301 --cas_T_0_dec 2301 --load_init 1 --load_pretrained 1 --load_resume 0 --init_chkpt_file_enc ./weights/pretrained_hydranet_encoder.320_256.multiscale_dense.pth.tar --out_chkpt_file checkpoint.pretrained.encoder_multiscale_dense.decoder_rand.pth.tar --val_every 100 --freeze_enc_epoch 200 --output_dir ./pretrain_multiscale_dense_enc_rand_dec6 --batch_size 8
+
+
+# Train Command w/ learnable uncertainty weight loss
+CUDA_VISIBLE_DEVICES=4 python ./main.py --lr_enc 1e-4 --cas_min_lr_enc 8e-5 --cas_final_lr_enc 3e-6 --lr_dec 7e-4 --cas_min_lr_dec 9e-5 --cas_final_lr_dec 7e-6 --cas_warmup_steps_enc 50 --cas_warmup_steps_dec 180 --max_iter 2301 --cas_T_0_enc 2301 --cas_T_0_dec 2301 --load_init 1 --load_pretrained 1 --load_resume 0 --init_chkpt_file_enc ./weights/pretrained_hydranet_encoder.320_256.multiscale_dense.pth.tar --out_chkpt_file checkpoint.pretrained.encoder_multiscale_dense.decoder_rand.pth.tar --val_every 100 --freeze_enc_epoch 200 --output_dir ./pretrain_multiscale_dense_enc_rand_dec7_uncweightloss/ --batch_size 8 --use_uncloss_weight --weight_decay_enc 6e-4 --weight_decay_dec 3e-4
+
+
+# Evaluate Command
+CUDA_VISIBLE_DEVICES=0 python ./eval.py --checkpoint_file ./pretrain_multiscale_dense_enc_rand_dec6/best_checkpoint.pretrained.encoder_multiscale_dense.decoder_rand.pth.tar --output_dir ./pretrain_multiscale_dense_enc_rand_dec6
+
+CUDA_VISIBLE_DEVICES=0 python ./eval.py --checkpoint_file ./pretrain_multiscale_dense_enc_rand_dec6_uncweightloss/best_checkpoint.pretrained.encoder_multiscale_dense.decoder_rand.pth.tar --output_dir ./pretrain_multiscale_dense_enc_rand_dec6_uncweightloss
+
+
+
+

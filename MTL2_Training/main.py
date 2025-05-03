@@ -81,6 +81,9 @@ def get_args_parser():
     parser.add_argument('--output_dir', default='./outputs', type=str)
     parser.add_argument("--final_linear_decay", action="store_true", help="Whether to do linear decay after cosin annealing.")
     parser.add_argument("--use_uncloss_weight", action="store_true", help="Whether to use learnable uncertainty loss weighting (Kendall et al., 2018).")
+    parser.add_argument('--weight_decay_enc', default=2e-4, type=float)
+    parser.add_argument('--weight_decay_dec', default=1e-4, type=float)
+
     return parser    
 
 
@@ -184,8 +187,8 @@ betas_encoder = (0.9, 0.99)
 betas_decoder = (0.9, 0.999)
 #momentum_encoder = 0.9
 #momentum_decoder = 0.9
-weight_decay_encoder = 2e-4
-weight_decay_decoder = 1e-4
+weight_decay_encoder = args.weight_decay_enc
+weight_decay_decoder = args.weight_decay_dec
 '''Adam'''
 # Extract encoder parameters (MobileNetV2)
 # Extract decoder parameters (RefineNet)
