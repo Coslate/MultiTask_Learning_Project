@@ -80,6 +80,7 @@ def get_args_parser():
     parser.add_argument('--freeze_enc_epoch', default=500, type=int)
     parser.add_argument('--output_dir', default='./outputs', type=str)
     parser.add_argument("--final_linear_decay", action="store_true", help="Whether to do linear decay after cosin annealing.")
+    parser.add_argument("--use_uncloss_weight", action="store_true", help="Whether to use learnable uncertainty loss weighting (Kendall et al., 2018).")
     return parser    
 
 
@@ -450,17 +451,18 @@ def train(model, opts, crits, dataloader, train_losses, loss_coeffs=(1.0,), grad
             target = target.squeeze(dim=1)  # Ensure (B, H, W)
             target = torch.clamp(target, 0, num_classes - 1)  # Ensure valid class range
             out = F.interpolate(out, size=target.size()[1:], mode="bilinear", align_corners=False)  # Resize logits
-            '''
-            if crit == crit_segm:
-                task_loss = crit(out, target)
-                weighted_loss = (1.0 / (2.0 * torch.exp(2 * log_sigma_seg))) * task_loss + log_sigma_seg
-            elif crit == crit_depth:
-                task_loss = crit(out, target)
-                weighted_loss = (1.0 / (2.0 * torch.exp(2 * log_sigma_depth))) * task_loss + log_sigma_depth
 
-            loss += weighted_loss
-            '''
-            loss += loss_coeff * crit(out, target)  # Compute loss            
+            if args.use_uncloss_weight:
+                if crit == crit_segm:
+                    task_loss = crit(out, target)
+                    weighted_loss = (1.0 / (2.0 * torch.exp(2 * log_sigma_seg))) * task_loss + log_sigma_seg
+                elif crit == crit_depth:
+                    task_loss = crit(out, target)
+                    weighted_loss = (1.0 / (2.0 * torch.exp(2 * log_sigma_depth))) * task_loss + log_sigma_depth
+
+                loss += weighted_loss
+            else:
+                loss += loss_coeff * crit(out, target)  # Compute loss            
 
         # BACKWARD
         loss.backward()
