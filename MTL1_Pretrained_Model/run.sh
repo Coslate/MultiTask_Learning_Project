@@ -1,0 +1,7 @@
+#! /bin/sh -f
+
+# Multi-Scale Dense Constrarive Learning
+CUDA_VISIBLE_DEVICES=4 python ./main.py --lr_enc 1e-2 --max_iter 10000 --cas_warmup_steps_enc 300 --cas_min_lr_enc 9e-5 --cas_T_0_enc 10000 --out_chkpt_file pretrained_full.320_256.epoch10000.multiscale_dense.pth.tar --out_encoder_chkpt_file pretrained_hydranet_encoder.320_256.epoch10000.multiscale_dense.pth.tar --out_pretrain_loss_file ./pretrained_full.320_256.epoch10000.multiscale_dense.loss_file.npz --out_pretrain_loss_figfile_name pretrained_full.320_256.epoch10000.multiscale_dense.loss_fig.png --out_dir ./pretrained_full_320_256_epoch10000_multiscale_dense
+
+# Auencoder Pretraining
+CUDA_VISIBLE_DEVICES=3 python ./pretrain_autoencoder_main.py --lr_enc 8e-4 --max_iter 10000 --cas_warmup_steps_enc 500 --cas_min_lr_enc 9e-5 --cas_T_0_enc 10000 --out_full_autoencoder_chkpt_file pretrained_full.autoencoder.epoch10000.pth.tar --out_encoder_chkpt_file pretrained_hydranet_encoder.autoencoder.epoch10000.pth.tar --out_decoder_chkpt_file pretrained_hydranet_decoder.autoencoder.epoch10000.pth.tar --out_pretrain_loss_file pretrained_hydranet_encoder.autoencoder.epoch10000.loss_file.npz --out_pretrain_loss_figfile_name pretrained_hydranet_encoder.autoencoder.epoch10000.loss_fig.png --out_dir ./pretrained_full_autoencoder_epoch10000

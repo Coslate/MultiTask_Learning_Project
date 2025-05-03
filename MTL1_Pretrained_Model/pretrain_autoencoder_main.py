@@ -22,7 +22,7 @@ import gc
 from hydranet import *
 from simclr import *
 import torch.optim as optim
-from autoencoder import *
+from autoencoder import HydraAutoencoder
 from dataset import NYUDv2Autoencoder
 from scheduler import CustomScheduler
 
@@ -54,10 +54,13 @@ def get_args_parser():
     parser.add_argument('--out_decoder_chkpt_file', default='./pretrained_hydranet_decoder.autoencoder.pth.tar', type=str)
     parser.add_argument('--out_pretrain_loss_file', default='./pretrained_loss_file.autoencoder.npz', type=str)
     parser.add_argument('--out_pretrain_loss_figfile_name', default='./pretrained_loss_fig.autoencoder.png', type=str)
+    parser.add_argument('--out_dir', default='./pretrained_output', type=str)
+    parser.add_argument("--final_linear_decay", action="store_true", help="Whether to do linear decay after cosin annealing.")
     return parser    
 
 parser = argparse.ArgumentParser("Singleto3D", parents=[get_args_parser()])
 args = parser.parse_args()
+os.makedirs(args.out_dir, exist_ok=True)
 
 #DataLoader
 img_scale = 1.0 / 255
@@ -88,6 +91,7 @@ transform_pretrain = transforms.Compose([
 init_vals = (0.0, 10000.0)
 comp_fns = [operator.gt, operator.lt]
 
+'''
 saver = Saver(
     args=locals(),
     ckpt_file=args.out_full_autoencoder_chkpt_file,
@@ -95,6 +99,7 @@ saver = Saver(
     condition=comp_fns,
     save_several_mode=all,
 )
+'''
 
 if args.load_init == 1:
     ckpt_path = ''
@@ -135,7 +140,7 @@ final_lr_enc = args.cas_final_lr_enc         # Final minimum LR for convergence
 T_0_enc = args.cas_T_0_enc
 T_mult_enc = args.cas_T_mult_enc
 
-cas_scheduler_enc = CustomScheduler(optimizer, warmup_steps_enc, total_steps, min_lr_enc, learning_rate_enc, final_lr_enc, T_0_enc, T_mult_enc)    
+cas_scheduler_enc = CustomScheduler(optimizer, warmup_steps_enc, total_steps, min_lr_enc, learning_rate_enc, final_lr_enc, T_0_enc, T_mult_enc, args.final_linear_decay)
 
 # Pretraining Loop
 n_epochs = args.max_iter if args.early_stop_iter is None else args.early_stop_iter
@@ -215,21 +220,21 @@ for epoch in range(start_epoch, n_epochs+1):
         'epoch': epoch,  # Save current epoch
         'learning_rate': optimizer.param_groups[0]['lr'],  # Save current LR
         }
-        torch.save(checkpoint, args.out_full_autoencoder_chkpt_file)
-        np.savez(f"{args.out_pretrain_loss_file}",
+        torch.save(checkpoint, os.path.join(args.out_dir, os.path.basename(args.out_full_autoencoder_chkpt_file)))
+        np.savez(f"{os.path.join(args.out_dir, os.path.basename(args.out_pretrain_loss_file))}",
                 train_losses=train_losses)       
 
 # Save encoder weights
-torch.save(model.hydranet.extract_encoder(init=False).state_dict(), f'{args.out_encoder_chkpt_file}')
+torch.save(model.hydranet.extract_encoder(init=False).state_dict(), f'{os.path.join(args.out_dir, os.path.basename(args.out_encoder_chkpt_file))}')
 
 # Save decoder weights (everything except encoder)
 full_state_dict = model.hydranet.state_dict()
 encoder_keys = model.hydranet.extract_encoder(init=False).state_dict().keys()
 decoder_state_dict = {k: v for k, v in full_state_dict.items() if k not in encoder_keys}
-torch.save(decoder_state_dict, f'{args.out_decoder_chkpt_file}')
+torch.save(decoder_state_dict, f'{os.path.join(args.out_dir, os.path.basename(args.out_decoder_chkpt_file))}')
 
 # Save full model (optional)
-torch.save(model.hydranet.state_dict(), f'{args.out_full_autoencoder_chkpt_file}')
+torch.save(model.hydranet.state_dict(), f'{os.path.join(args.out_dir, os.path.basename(args.out_full_autoencoder_chkpt_file))}')
             
 # === Save Train Loss & Validation Loss Plot ===
 epochs = list(range(1, len(train_losses) + 1))
@@ -244,5 +249,5 @@ plt.legend()
 plt.grid(True)
 
 # Save plot
-plt.savefig(f"{args.out_pretrain_loss_figfile_name}", dpi=300, bbox_inches='tight')
+plt.savefig(f"{os.path.join(args.out_dir, os.path.basename(args.out_pretrain_loss_figfile_name))}", dpi=300, bbox_inches='tight')
 plt.close()  # Close the figure to free memory
