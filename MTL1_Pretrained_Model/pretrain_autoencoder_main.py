@@ -113,7 +113,7 @@ elif args.load_resume == 1:
     #start_epoch, state_dict, start_opt_dict, start_lr = saver.maybe_load(ckpt_path=ckpt_path, keys_to_load=["epoch", "state_dict", "optimizer_state_dict", "learning_ragt"],)
 
     # Load the .npz file
-    loaded_data = np.load(f"{args.pretrain_loss_file}")
+    loaded_data = np.load(f"{args.out_pretrain_loss_file}")
 
     # Extract arrays
     train_losses = list(loaded_data["train_losses"])
