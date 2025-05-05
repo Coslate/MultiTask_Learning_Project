@@ -287,13 +287,6 @@ if args.load_init == 1 and args.load_pretrained == 1 and args.load_resume == 0:
         encoder_ckpt = torch.load(args.init_chkpt_file_enc)
         encoder_state_dict = encoder_ckpt['state_dict'] if 'state_dict' in encoder_ckpt else encoder_ckpt
 
-        # Normalize key names
-        if any(k.startswith("encoder.layer") for k in encoder_state_dict):
-            print("Detected SimCLR-style keys with 'encoder.' prefix")
-            encoder_state_dict = {
-                k.replace("encoder.", ""): v for k, v in encoder_state_dict.items()
-            }
-
         # Only retain encoder keys
         encoder_keys = [k for k in hydranet_model.state_dict() if k.startswith("layer") or k.startswith("final_conv")]
         encoder_state_dict_filtered = {
@@ -308,25 +301,26 @@ if args.load_init == 1 and args.load_pretrained == 1 and args.load_resume == 0:
         # Load decoder weights
         # Load the full checkpoint state_dict (no 'state_dict' key wrapper)
         decoder_ckpt = torch.load(args.init_chkpt_file_dec)  # path to pretrained_full.autoencoder.pth.tar
+        decoder_state_dict = decoder_ckpt['state_dict'] if 'state_dict' in decoder_ckpt else decoder_ckpt
 
         # Get encoder keys from a clean HydraNet instance
         encoder_keys = hydranet_model.extract_encoder(init=False).state_dict().keys()
 
         # Filter only decoder weights
-        decoder_state_dict = {
-            k: v for k, v in decoder_ckpt.items()
-            if k not in encoder_keys and not k.startswith("segm.")
-        }    
+        decoder_state_dict_filtered = {
+            k: v for k, v in decoder_state_dict.items()
+            if k not in encoder_keys and not k.startswith("segm") and not k.startswith('depth') and not k.startswith('pre_')
+        }
 
         # Load them into the full HydraNet model
-        load_state_dict(hydranet_model, decoder_state_dict, strict=False)
+        load_state_dict(hydranet_model, decoder_state_dict_filtered, strict=False)
         print("Decoder weights loaded from:", args.init_chkpt_file_dec)
 
         print("Model has {} parameters".format(sum([p.numel() for p in hydranet_model.parameters()])))    
 
     if args.init_chkpt_file_dec is not None and args.init_chkpt_file_enc is not None:
         #-----------Check if Missing Key-----------#
-        loaded_keys = set(list(encoder_state_dict_filtered.keys()) + list(decoder_state_dict.keys()))
+        loaded_keys = set(list(encoder_state_dict_filtered.keys()) + list(decoder_state_dict_filtered.keys()))
         model_keys = set(hydranet_model.state_dict().keys())
 
         missing_keys = sorted(list(model_keys - loaded_keys))
@@ -339,11 +333,10 @@ if args.load_init == 1 and args.load_pretrained == 1 and args.load_resume == 0:
 
         print(f"\nUnexpected keys (found in loaded weights but not used in model): {len(unexpected_keys)}")
         for k in unexpected_keys:
-            print(f"  - {k}")    
+            print(f"  - {k}")
     elif args.init_chkpt_file_enc is not None:
         #-----------Check if Missing Key-----------#
         loaded_keys = set(list(encoder_state_dict_filtered.keys()))
-        model_keys = set(hydranet_model.extract_encoder(init=False).state_dict().keys())
         model_keys = set(k for k in hydranet_model.state_dict().keys() if k.startswith("layer") or k.startswith("final_conv"))
 
         missing_keys = sorted(list(model_keys - loaded_keys))
@@ -360,7 +353,7 @@ if args.load_init == 1 and args.load_pretrained == 1 and args.load_resume == 0:
 
     elif args.init_chkpt_file_dec is not None:
         #-----------Check if Missing Key-----------#
-        loaded_keys = set(list(decoder_state_dict.keys()))
+        loaded_keys = set(list(decoder_state_dict_filtered.keys()))
         model_keys = set(
             k for k in hydranet_model.state_dict().keys()
             if not (k.startswith("layer") or k.startswith("final_conv"))
