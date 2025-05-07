@@ -380,8 +380,9 @@ elif args.load_init == 1 and args.load_pretrained == 0 and args.load_resume == 0
     print("Model has {} parameters".format(sum([p.numel() for p in hydranet_model.parameters()])))
 elif args.load_resume == 1:
     # If the pretrained model has different num_classs in segm head, remove the segmentation head weights (since the number of classes changed)
-    [start_epoch, _, state_dict], checkpoint = saver.maybe_load(ckpt_path=ckpt_path, keys_to_load=["epoch", "best_val", "state_dict"], ret_ckpt=True)
-    filtered_state_dict = {k: v for k, v in state_dict.items() if "segm" not in k}
+    ret_loaded_key_values, checkpoint = saver.maybe_load(ckpt_path=ckpt_path, keys_to_load=["epoch", "best_val", "state_dict"], ret_ckpt=True)
+    start_epoch, _, state_dict = ret_loaded_key_values
+    filtered_state_dict = {k: v for k, v in state_dict.items()}
     load_state_dict(hydranet_model, filtered_state_dict)
     print(f"Load resuming weights from {ckpt_path}")
     print("Model has {} parameters".format(sum([p.numel() for p in hydranet_model.parameters()])))
