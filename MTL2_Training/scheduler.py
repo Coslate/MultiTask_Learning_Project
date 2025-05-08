@@ -54,6 +54,9 @@ class CustomScheduler:
             # Final decay to stabilize learning
             progress = (self.current_step - self.cos_anneal_stage) / (self.total_steps - self.cos_anneal_stage)
             new_lr = self.fin_mid_lr + (self.final_lr - self.fin_mid_lr) * progress
+        else:
+            # Stay at last cosine LR
+            new_lr = self.cosine_scheduler.get_last_lr()[0]            
 
         # Apply new learning rate
         for param_group in self.optimizer.param_groups:

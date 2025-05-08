@@ -470,8 +470,10 @@ def train(model, opts, crits, dataloader, train_losses, loss_coeffs=(1.0,), grad
         for opt in opts:
             opt.step()
 
-        log_sigma_seg.data.clamp_(min=-3, max=3)
-        log_sigma_depth.data.clamp_(min=-3, max=3)
+        #log_sigma_seg.data.clamp_(min=-3, max=3)
+        #log_sigma_depth.data.clamp_(min=-3, max=3)
+        log_sigma_seg.data.clamp_(min=0.1, max=2)
+        log_sigma_depth.data.clamp_(min=0.1, max=2)
         loss_meter.update(loss.item())
         pbar.set_description(
             "Loss {:.3f} | Avg. Loss {:.3f}".format(loss.item(), loss_meter.avg)
