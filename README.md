@@ -1,5 +1,5 @@
 
-# Multi-Task Learning for Real-Time Semantic Segmentation and Depth Estimation
+# Multi-Task Learning for Real-Time Segmentation and Depth Estimation
 
 This project implements a multi-task learning pipeline on the NYUv2 dataset using:
 
