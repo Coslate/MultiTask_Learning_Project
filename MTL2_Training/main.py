@@ -230,8 +230,8 @@ log_sigma_depth = nn.Parameter(torch.zeros(1, device=device), requires_grad=True
 optimizer_sigma_seg = torch.optim.AdamW([log_sigma_seg], lr=args.lr_sigma_seg, betas=betas_sigma_seg, weight_decay=weight_decay_sigma_seg)
 optimizer_sigma_depth = torch.optim.AdamW([log_sigma_depth], lr=args.lr_sigma_depth, betas=betas_sigma_depth, weight_decay=weight_decay_sigma_depth)
 
-#cas_scheduler_sigma_seg = CustomScheduler(optimizer_sigma_seg, args.cas_warmup_steps_sigma_seg, total_steps, args.cas_min_lr_sigma_seg, args.lr_sigma_seg, args.cas_final_lr_sigma_seg, args.cas_T_0_sigma_seg, args.cas_T_mult_sigma_seg)    
-#cas_scheduler_sigma_depth = CustomScheduler(optimizer_sigma_depth, args.cas_warmup_steps_sigma_depth, total_steps, args.cas_min_lr_sigma_depth, args.lr_sigma_depth, args.cas_final_lr_sigma_depth, args.cas_T_0_sigma_depth, args.cas_T_mult_sigma_depth)    
+cas_scheduler_sigma_seg = CustomScheduler(optimizer_sigma_seg, args.cas_warmup_steps_sigma_seg, total_steps, args.cas_min_lr_sigma_seg, args.lr_sigma_seg, args.cas_final_lr_sigma_seg, args.cas_T_0_sigma_seg, args.cas_T_mult_sigma_seg, args.final_linear_decay)    
+cas_scheduler_sigma_depth = CustomScheduler(optimizer_sigma_depth, args.cas_warmup_steps_sigma_depth, total_steps, args.cas_min_lr_sigma_depth, args.lr_sigma_depth, args.cas_final_lr_sigma_depth, args.cas_T_0_sigma_depth, args.cas_T_mult_sigma_depth, args.final_linear_decay)
 
 # ============ Load Initial / Reload ================#
 if args.load_init == 1 and args.load_pretrained == 1:
@@ -396,8 +396,8 @@ elif args.load_resume == 1:
     # Restore the custom scheduler states
     cas_scheduler_enc.__dict__.update(checkpoint['scheduler_encoder'])
     cas_scheduler_dec.__dict__.update(checkpoint['scheduler_decoder'])    
-    #cas_scheduler_sigma_seg.__dict__.update(checkpoint['scheduler_sigma_seg'])
-    #cas_scheduler_sigma_depth.__dict__.update(checkpoint['scheduler_sigma_depth'])    
+    cas_scheduler_sigma_seg.__dict__.update(checkpoint['scheduler_sigma_seg'])
+    cas_scheduler_sigma_depth.__dict__.update(checkpoint['scheduler_sigma_depth'])    
     print(f"Restored Encoder LR: {optimizer_encoder.param_groups[0]['lr']}")
     print(f"Restored Decoder LR: {optimizer_decoder.param_groups[0]['lr']}")
     print(f"Restored sigma_seg LR: {optimizer_sigma_seg.param_groups[0]['lr']}")
@@ -551,8 +551,8 @@ frozen_set = False
 for i in range(start_epoch, n_epochs):
     cas_scheduler_enc.step(i)
     cas_scheduler_dec.step(i)
-    #cas_scheduler_sigma_seg.step(i)
-    #cas_scheduler_sigma_depth.step(i)
+    cas_scheduler_sigma_seg.step(i)
+    cas_scheduler_sigma_depth.step(i)
 
     # === Conditional Encoder Freezing ===
     if args.freeze_enc_epoch > 0 and frozen_set == False:
@@ -584,7 +584,7 @@ for i in range(start_epoch, n_epochs):
     current_lr_dec = cas_scheduler_dec.get_last_lr()[0]
     lr_values_dec.append(current_lr_dec)
     current_lr_enc = cas_scheduler_enc.get_last_lr()[0]
-    lr_values_enc.append(current_lr_dec)
+    lr_values_enc.append(current_lr_enc)
 
     # Track Grad Norm
     total_norm = 0.0
@@ -620,8 +620,8 @@ for i in range(start_epoch, n_epochs):
             'scheduler_decoder': cas_scheduler_dec.__dict__,  # Save decoder scheduler state
             'optimizer_sigma_seg': optimizer_sigma_seg.state_dict(),  # Save sigma_seg optimizer state
             'optimizer_sigma_depth': optimizer_sigma_depth.state_dict(),  # Save sigma_depth optimizer state
-            #'scheduler_sigma_seg': cas_scheduler_sigma_seg.__dict__,  # Save sigma_seg scheduler state
-            #'scheduler_sigma_depth': cas_scheduler_sigma_depth.__dict__,  # Save sigma_depth scheduler state
+            'scheduler_sigma_seg': cas_scheduler_sigma_seg.__dict__,  # Save sigma_seg scheduler state
+            'scheduler_sigma_depth': cas_scheduler_sigma_depth.__dict__,  # Save sigma_depth scheduler state
         }        
         base_chkpt_file_name = os.path.basename(args.out_chkpt_file)
         base_metric_file_name = os.path.basename(args.load_metric_file)
