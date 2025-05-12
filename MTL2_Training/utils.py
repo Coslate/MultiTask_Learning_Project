@@ -283,3 +283,71 @@ def get_param_groups(model):
         else:
             decoder_params.append(param)
     return encoder_params, decoder_params, segm_head_params
+
+class GradientLoss(nn.Module):
+    """Gradient Loss for enforcing spatial smoothness in depth estimation.
+    Encourages the spatial gradients of predicted and ground truth depth to match.
+    
+    Args:
+        ignore_index (float): Depth value to ignore in the target mask.
+    """
+
+    def __init__(self, ignore_index=0.0):
+        super(GradientLoss, self).__init__()
+        self.ignore_index = ignore_index
+
+    def forward(self, pred, target):
+        if target.dim() == 3:
+            target = target.unsqueeze(1)  # (B, 1, H, W)
+        # Generate valid mask
+        mask = (target != self.ignore_index).float()
+
+        # Compute horizontal and vertical gradients
+        dx_pred = pred[:, :, :, :-1] - pred[:, :, :, 1:]
+        dy_pred = pred[:, :, :-1, :] - pred[:, :, 1:, :]
+
+        dx_target = target[:, :, :, :-1] - target[:, :, :, 1:]
+        dy_target = target[:, :, :-1, :] - target[:, :, 1:, :]
+
+        dx_mask = mask[:, :, :, :-1] * mask[:, :, :, 1:]
+        dy_mask = mask[:, :, :-1, :] * mask[:, :, 1:, :]
+
+        # Compute squared gradient difference only on valid pixels
+        loss_dx = F.mse_loss(dx_pred * dx_mask, dx_target * dx_mask, reduction='sum')
+        loss_dy = F.mse_loss(dy_pred * dy_mask, dy_target * dy_mask, reduction='sum')
+
+        total_valid = dx_mask.sum() + dy_mask.sum()
+        if total_valid == 0:
+            return torch.tensor(0.0, dtype=pred.dtype, device=pred.device)
+
+        return (loss_dx + loss_dy) / total_valid
+
+class DepthLoss(nn.Module):
+    def __init__(self, lambda_invhuber=0.7, lambda_l1=0.3, lambda_grad=0.1, ignore_index=0.0, learnable_weights=False):
+        super().__init__()
+        self.invhuber = InvHuberLoss(ignore_index=ignore_index)
+        self.l1 = nn.L1Loss()
+        self.grad = GradientLoss(ignore_index=ignore_index)
+
+        if learnable_weights:
+            self.lambda_invhuber = nn.Parameter(torch.tensor(lambda_invhuber, dtype=torch.float32))
+            self.lambda_l1 = nn.Parameter(torch.tensor(lambda_l1, dtype=torch.float32))
+            self.lambda_grad = nn.Parameter(torch.tensor(lambda_grad, dtype=torch.float32))
+        else:
+            self.register_buffer('lambda_invhuber', torch.tensor(lambda_invhuber))
+            self.register_buffer('lambda_l1', torch.tensor(lambda_l1))
+            self.register_buffer('lambda_grad', torch.tensor(lambda_grad))
+
+    def forward(self, pred, target):
+        if target.dim() == 3:
+            target = target.unsqueeze(1)        
+
+        loss = 0.0
+
+        if self.lambda_invhuber.item() > 0:
+            loss += self.lambda_invhuber * self.invhuber(pred, target)
+        if self.lambda_l1.item() > 0:
+            loss += self.lambda_l1 * self.l1(pred, target)
+        if self.lambda_grad.item() > 0:
+            loss += self.lambda_grad * self.grad(pred, target)
+        return loss

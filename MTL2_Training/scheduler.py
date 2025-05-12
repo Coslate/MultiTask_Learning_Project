@@ -1,7 +1,7 @@
 import torch
 
 class CustomScheduler:
-    def __init__(self, optimizer, warmup_steps, total_steps, min_lr, max_lr, final_lr, T_0, T_mult, final_linear_decay=False):
+    def __init__(self, optimizer, warmup_steps, total_steps, min_lr, max_lr, final_lr, T_0, T_mult, final_linear_decay=False, restart=False):
         """
         Custom Learning Rate Scheduler.
         
@@ -26,9 +26,14 @@ class CustomScheduler:
         self.current_step = 0
         self.T_0 = T_0
         self.T_mult = T_mult
-        self.cos_anneal_stage = self.warmup_steps+self.T_0
+
+        self.restart_count = 0
+        self.current_cycle_len = self.T_0
+        self.cos_anneal_stage = self.warmup_steps + self.current_cycle_len
+
         self.fin_mid_lr = (self.max_lr + self.min_lr)/2
         self.fin_linear_decay = final_linear_decay
+        self.restart = restart
 
         # Cosine Annealing Phase (Mid-Phase: 5e-4 as transition point)
         if self.fin_linear_decay:
@@ -49,18 +54,29 @@ class CustomScheduler:
         elif self.current_step < self.cos_anneal_stage:
             # Cosine annealing decay
             self.cosine_scheduler.step()
+            scale = 1.0 / (2 ** self.restart_count)
+            scaled_max_lr = self.max_lr * scale
+            self.cosine_scheduler.base_lrs = [scaled_max_lr for _ in self.optimizer.param_groups]
             new_lr = self.cosine_scheduler.get_last_lr()[0]
         elif self.fin_linear_decay:
             # Final decay to stabilize learning
             progress = (self.current_step - self.cos_anneal_stage) / (self.total_steps - self.cos_anneal_stage)
             new_lr = self.fin_mid_lr + (self.final_lr - self.fin_mid_lr) * progress
+            self.cosine_scheduler = None  # Stop future calls
         else:
             # Stay at last cosine LR
-            new_lr = self.cosine_scheduler.get_last_lr()[0]            
+            if self.cosine_scheduler:
+                new_lr = self.cosine_scheduler.get_last_lr()[0]            
 
         # Apply new learning rate
         for param_group in self.optimizer.param_groups:
             param_group['lr'] = new_lr
+
+        # Check if cosine cycle just ended — update cycle length and next phase end
+        if self.restart and self.current_step == self.cos_anneal_stage:
+            self.restart_count += 1
+            self.current_cycle_len *= self.T_mult
+            self.cos_anneal_stage += self.current_cycle_len            
 
     def state_dict(self):
         return {
