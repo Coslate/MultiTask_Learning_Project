@@ -342,7 +342,7 @@ class DepthLoss(nn.Module):
         if target.dim() == 3:
             target = target.unsqueeze(1)        
 
-        loss = 0.0
+        loss = torch.tensor(0.0, dtype=pred.dtype, device=pred.device)
 
         if self.lambda_invhuber.item() > 0:
             loss += self.lambda_invhuber * self.invhuber(pred, target)
@@ -350,4 +350,5 @@ class DepthLoss(nn.Module):
             loss += self.lambda_l1 * self.l1(pred, target)
         if self.lambda_grad.item() > 0:
             loss += self.lambda_grad * self.grad(pred, target)
+
         return loss

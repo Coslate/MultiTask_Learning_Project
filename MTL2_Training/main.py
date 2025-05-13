@@ -82,12 +82,16 @@ def get_args_parser():
     parser.add_argument("--final_linear_decay", action="store_true", help="Whether to do linear decay after cosin annealing.")
     parser.add_argument("--cos_anneal_restart", action="store_true", help="Whether restart the cosine annealing scheduling after T_0.")
     parser.add_argument("--use_uncloss_weight", action="store_true", help="Whether to use learnable uncertainty loss weighting (Kendall et al., 2018).")
+    parser.add_argument("--use_learnw_invhub_l1_grad", action="store_true", help="Whether to use learnable weighting for weighting between invhuber/L1/grad loss")
     parser.add_argument('--weight_decay_enc', default=2e-4, type=float)
     parser.add_argument('--weight_decay_dec', default=1e-4, type=float)
     parser.add_argument('--weight_decay_dec_depthloss', default=1e-4, type=float)
     parser.add_argument('--lr_dec_invhuber', default=2e-3, type=float)
     parser.add_argument('--lr_dec_l1', default=8e-4, type=float)
     parser.add_argument('--lr_dec_grad', default=5e-4, type=float)
+    parser.add_argument('--invhuber_weight', default=0.6, type=float)
+    parser.add_argument('--l1_weight', default=0.3, type=float)
+    parser.add_argument('--grad_weight', default=0.1, type=float)
 
     return parser
 
@@ -153,11 +157,12 @@ lambda_grad = torch.nn.Parameter(torch.tensor(0.3), requires_grad=True)
 lambda_l1 = torch.nn.Parameter(torch.tensor(0.4), requires_grad=True)
 
 crit_segm = nn.CrossEntropyLoss(ignore_index=ignore_index)
-crit_depth = DepthLoss(lambda_invhuber=0.7, lambda_l1=0.3, lambda_grad=0.1, ignore_index=ignore_index, learnable_weights=True)
+crit_depth = DepthLoss(lambda_invhuber=args.invhuber_weight, lambda_l1=args.l1_weight, lambda_grad=args.grad_weight, ignore_index=ignore_index, learnable_weights=args.use_learnw_invhub_l1_grad)
 
-param_invhuber = [crit_depth.lambda_invhuber]
-param_l1 = [crit_depth.lambda_l1]
-param_grad = [crit_depth.lambda_grad]
+if args.use_learnw_invhub_l1_grad:
+    param_invhuber = [crit_depth.lambda_invhuber]
+    param_l1 = [crit_depth.lambda_l1]
+    param_grad = [crit_depth.lambda_grad]
 
 #n_epochs = 1000
 n_epochs = args.max_iter if args.early_stop_iter is None else args.early_stop_iter
@@ -212,9 +217,10 @@ optimizer_decoder = torch.optim.AdamW([
     {'params': segm_head_params, 'lr': lr_decoder * 3},  # ← 3× higher LR for segm head
 ], betas=betas_decoder, weight_decay=weight_decay_decoder)
 
-optimizer_invhuber = torch.optim.AdamW(param_invhuber, lr=args.lr_dec_invhuber, betas=betas_decoder, weight_decay=args.weight_decay_dec_depthloss)
-optimizer_l1 = torch.optim.AdamW(param_l1, lr=args.lr_dec_l1, betas=betas_decoder, weight_decay=args.weight_decay_dec_depthloss)
-optimizer_grad = torch.optim.AdamW(param_grad, lr=args.lr_dec_grad, betas=betas_decoder, weight_decay=args.weight_decay_dec_depthloss)
+if args.use_learnw_invhub_l1_grad:
+    optimizer_invhuber = torch.optim.AdamW(param_invhuber, lr=args.lr_dec_invhuber, betas=betas_decoder, weight_decay=args.weight_decay_dec_depthloss)
+    optimizer_l1 = torch.optim.AdamW(param_l1, lr=args.lr_dec_l1, betas=betas_decoder, weight_decay=args.weight_decay_dec_depthloss)
+    optimizer_grad = torch.optim.AdamW(param_grad, lr=args.lr_dec_grad, betas=betas_decoder, weight_decay=args.weight_decay_dec_depthloss)
 
 # ============ Cosine Annealing Scheduler ================#
 learning_rate_enc = args.lr_enc  # Max LR, 9e-4
@@ -234,10 +240,10 @@ T_mult_dec = args.cas_T_mult_dec
 cas_scheduler_enc = CustomScheduler(optimizer_encoder, warmup_steps_enc, total_steps, min_lr_enc, learning_rate_enc, final_lr_enc, T_0_enc, T_mult_enc, args.final_linear_decay, args.cos_anneal_restart)
 cas_scheduler_dec = CustomScheduler(optimizer_decoder, warmup_steps_dec, total_steps, min_lr_dec, learning_rate_dec, final_lr_dec, T_0_dec, T_mult_dec, args.final_linear_decay, args.cos_anneal_restart)
 
-
-cas_scheduler_invhuber = CustomScheduler(optimizer_invhuber, args.cas_warmup_steps_sigma_depth, total_steps, args.cas_min_lr_sigma_depth, args.lr_sigma_depth, args.cas_final_lr_sigma_depth, args.cas_T_0_sigma_depth, args.cas_T_mult_sigma_depth, args.final_linear_decay, args.cos_anneal_restart)
-cas_scheduler_l1 = CustomScheduler(optimizer_l1, args.cas_warmup_steps_sigma_depth, total_steps, args.cas_min_lr_sigma_depth, args.lr_sigma_depth, args.cas_final_lr_sigma_depth, args.cas_T_0_sigma_depth, args.cas_T_mult_sigma_depth, args.final_linear_decay, args.cos_anneal_restart)
-cas_scheduler_grad = CustomScheduler(optimizer_grad, args.cas_warmup_steps_sigma_depth, total_steps, args.cas_min_lr_sigma_depth, args.lr_sigma_depth, args.cas_final_lr_sigma_depth, args.cas_T_0_sigma_depth, args.cas_T_mult_sigma_depth, args.final_linear_decay, args.cos_anneal_restart)
+if args.use_learnw_invhub_l1_grad:
+    cas_scheduler_invhuber = CustomScheduler(optimizer_invhuber, args.cas_warmup_steps_sigma_depth, total_steps, args.cas_min_lr_sigma_depth, args.lr_sigma_depth, args.cas_final_lr_sigma_depth, args.cas_T_0_sigma_depth, args.cas_T_mult_sigma_depth, args.final_linear_decay, args.cos_anneal_restart)
+    cas_scheduler_l1 = CustomScheduler(optimizer_l1, args.cas_warmup_steps_sigma_depth, total_steps, args.cas_min_lr_sigma_depth, args.lr_sigma_depth, args.cas_final_lr_sigma_depth, args.cas_T_0_sigma_depth, args.cas_T_mult_sigma_depth, args.final_linear_decay, args.cos_anneal_restart)
+    cas_scheduler_grad = CustomScheduler(optimizer_grad, args.cas_warmup_steps_sigma_depth, total_steps, args.cas_min_lr_sigma_depth, args.lr_sigma_depth, args.cas_final_lr_sigma_depth, args.cas_T_0_sigma_depth, args.cas_T_mult_sigma_depth, args.final_linear_decay, args.cos_anneal_restart)
 
 # ================Learnable Uncertainty Weighting (Kendall et al., 2018)===================#
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -412,27 +418,30 @@ elif args.load_resume == 1:
     # Restore the custom optimizer states
     optimizer_encoder.load_state_dict(checkpoint['optimizer_encoder'])  # Restore encoder optimizer
     optimizer_decoder.load_state_dict(checkpoint['optimizer_decoder'])  # Restore decoder optimizer
-    optimizer_invhuber.load_state_dict(checkpoint['optimizer_invhuber'])  # Restore decoder optimizer
-    optimizer_l1.load_state_dict(checkpoint['optimizer_l1'])  # Restore decoder optimizer
-    optimizer_grad.load_state_dict(checkpoint['optimizer_grad'])  # Restore decoder optimizer
     optimizer_sigma_seg.load_state_dict(checkpoint['optimizer_sigma_seg'])  # Restore encoder optimizer
     optimizer_sigma_depth.load_state_dict(checkpoint['optimizer_sigma_depth'])  # Restore decoder optimizer
 
     # Restore the custom scheduler states
     cas_scheduler_enc.__dict__.update(checkpoint['scheduler_encoder'])
     cas_scheduler_dec.__dict__.update(checkpoint['scheduler_decoder'])    
-    cas_scheduler_invhuber.__dict__.update(checkpoint['scheduler_invhuber'])    
-    cas_scheduler_l1.__dict__.update(checkpoint['scheduler_l1'])    
-    cas_scheduler_grad.__dict__.update(checkpoint['scheduler_grad'])    
     cas_scheduler_sigma_seg.__dict__.update(checkpoint['scheduler_sigma_seg'])
     cas_scheduler_sigma_depth.__dict__.update(checkpoint['scheduler_sigma_depth'])    
     print(f"Restored Encoder LR: {optimizer_encoder.param_groups[0]['lr']}")
     print(f"Restored Decoder LR: {optimizer_decoder.param_groups[0]['lr']}")
-    print(f"Restored InvHuber LR: {optimizer_invhuber.param_groups[0]['lr']}")
-    print(f"Restored L1 LR: {optimizer_l1.param_groups[0]['lr']}")
-    print(f"Restored Grad LR: {optimizer_grad.param_groups[0]['lr']}")
     print(f"Restored sigma_seg LR: {optimizer_sigma_seg.param_groups[0]['lr']}")
     print(f"Restored sigma_depth LR: {optimizer_sigma_depth.param_groups[0]['lr']}")
+
+    if args.use_learnw_invhub_l1_grad:
+        optimizer_invhuber.load_state_dict(checkpoint['optimizer_invhuber'])  # Restore decoder optimizer
+        optimizer_l1.load_state_dict(checkpoint['optimizer_l1'])  # Restore decoder optimizer
+        optimizer_grad.load_state_dict(checkpoint['optimizer_grad'])  # Restore decoder optimizer
+        cas_scheduler_invhuber.__dict__.update(checkpoint['scheduler_invhuber'])
+        cas_scheduler_l1.__dict__.update(checkpoint['scheduler_l1'])
+        cas_scheduler_grad.__dict__.update(checkpoint['scheduler_grad'])
+        print(f"Restored InvHuber LR: {optimizer_invhuber.param_groups[0]['lr']}")
+        print(f"Restored L1 LR: {optimizer_l1.param_groups[0]['lr']}")
+        print(f"Restored Grad LR: {optimizer_grad.param_groups[0]['lr']}")
+
 elif args.load_init == 0 and args.load_pretrained == 0 and args.load_resume == 0:
     print(f"No loading weights, random initialized weights.")
 
@@ -582,11 +591,13 @@ frozen_set = False
 for i in range(start_epoch, n_epochs):
     cas_scheduler_enc.step(i)
     cas_scheduler_dec.step(i)
-    cas_scheduler_invhuber.step(i)
-    cas_scheduler_l1.step(i)
-    cas_scheduler_grad.step(i)
     cas_scheduler_sigma_seg.step(i)
     cas_scheduler_sigma_depth.step(i)
+
+    if args.use_learnw_invhub_l1_grad:
+        cas_scheduler_invhuber.step(i)
+        cas_scheduler_l1.step(i)
+        cas_scheduler_grad.step(i)
 
     # === Conditional Encoder Freezing ===
     if args.freeze_enc_epoch > 0 and frozen_set == False:
@@ -607,15 +618,23 @@ for i in range(start_epoch, n_epochs):
     if i % args.show_lr_freq_epoch == 0:
         current_lr_enc = optimizer_encoder.param_groups[0]['lr']
         current_lr_dec = optimizer_decoder.param_groups[0]['lr']
-        current_lr_invhuber = optimizer_invhuber.param_groups[0]['lr']
-        current_lr_l1 = optimizer_l1.param_groups[0]['lr']
-        current_lr_grad = optimizer_grad.param_groups[0]['lr']
         current_lr_sigma_seg = optimizer_sigma_seg.param_groups[0]['lr']
         current_lr_sigma_depth = optimizer_sigma_depth.param_groups[0]['lr']
-        print(f"Epoch {i} | Encoder Learning Rate: {current_lr_enc:.6f}, Decoder Learning Rate: {current_lr_dec:.6f}, Sigma Seg Learning Rate: {current_lr_sigma_seg:.6f}, Sigma Depth Learning Rate: {current_lr_sigma_depth:.6f}, InvHuber LR: {current_lr_invhuber: .6f}, L1 LR: {current_lr_l1}, Grad LR: {current_lr_grad: .6f}")
-    
-    train(model=hydranet_model, opts=[optimizer_encoder, optimizer_decoder, optimizer_invhuber, optimizer_l1, optimizer_grad, optimizer_sigma_seg, optimizer_sigma_depth], crits=[crit_segm, crit_depth], dataloader=trainloader, train_losses=train_losses, loss_coeffs=loss_coeffs, grad_norm=0.0)
 
+        if args.use_learnw_invhub_l1_grad:
+            current_lr_invhuber = optimizer_invhuber.param_groups[0]['lr']
+            current_lr_l1 = optimizer_l1.param_groups[0]['lr']
+            current_lr_grad = optimizer_grad.param_groups[0]['lr']
+            print(f"Epoch {i} | Encoder Learning Rate: {current_lr_enc:.6f}, Decoder Learning Rate: {current_lr_dec:.6f}, Sigma Seg Learning Rate: {current_lr_sigma_seg:.6f}, Sigma Depth Learning Rate: {current_lr_sigma_depth:.6f}, InvHuber LR: {current_lr_invhuber: .6f}, L1 LR: {current_lr_l1}, Grad LR: {current_lr_grad: .6f}")
+        else:
+            print(f"Epoch {i} | Encoder Learning Rate: {current_lr_enc:.6f}, Decoder Learning Rate: {current_lr_dec:.6f}, Sigma Seg Learning Rate: {current_lr_sigma_seg:.6f}, Sigma Depth Learning Rate: {current_lr_sigma_depth:.6f}")
+    
+    if args.use_learnw_invhub_l1_grad:
+        opts = [optimizer_encoder, optimizer_decoder, optimizer_invhuber, optimizer_l1, optimizer_grad, optimizer_sigma_seg, optimizer_sigma_depth]
+    else:
+        opts = [optimizer_encoder, optimizer_decoder, optimizer_sigma_seg, optimizer_sigma_depth]
+
+    train(model=hydranet_model, opts=opts, crits=[crit_segm, crit_depth], dataloader=trainloader, train_losses=train_losses, loss_coeffs=loss_coeffs, grad_norm=0.0)
 
     # Track LR
     current_lr_dec = cas_scheduler_dec.get_last_lr()[0]
@@ -648,24 +667,40 @@ for i in range(start_epoch, n_epochs):
             #saver.maybe_save(new_val=vals, dict_to_save={"state_dict": hydranet_model.state_dict(), "epoch": i})
 
     if i%args.save_freq == 0 and i > 0:
-        checkpoint = {
-            'state_dict': hydranet_model.state_dict(),  # Model weights
-            'epoch': i,  # Save the current epoch
-            'optimizer_encoder': optimizer_encoder.state_dict(),  # Save encoder optimizer state
-            'optimizer_decoder': optimizer_decoder.state_dict(),  # Save decoder optimizer state
-            'optimizer_sigma_seg': optimizer_sigma_seg.state_dict(),  # Save sigma_seg optimizer state
-            'optimizer_sigma_depth': optimizer_sigma_depth.state_dict(),  # Save sigma_depth optimizer state
-            'optimizer_invhuber': optimizer_invhuber.state_dict(),  # Save decoder optimizer state
-            'optimizer_l1': optimizer_l1.state_dict(),  # Save decoder optimizer state
-            'optimizer_grad': optimizer_grad.state_dict(),  # Save decoder optimizer state
-            'scheduler_encoder': cas_scheduler_enc.__dict__,  # Save encoder scheduler state
-            'scheduler_decoder': cas_scheduler_dec.__dict__,  # Save decoder scheduler state
-            'scheduler_invhuber': cas_scheduler_invhuber.__dict__,  # Save decoder scheduler state
-            'scheduler_l1': cas_scheduler_l1.__dict__,  # Save decoder scheduler state
-            'scheduler_grad': cas_scheduler_grad.__dict__,  # Save decoder scheduler state
-            'scheduler_sigma_seg': cas_scheduler_sigma_seg.__dict__,  # Save sigma_seg scheduler state
-            'scheduler_sigma_depth': cas_scheduler_sigma_depth.__dict__,  # Save sigma_depth scheduler state
-        }        
+
+        if args.use_learnw_invhub_l1_grad:
+            checkpoint = {
+                'state_dict': hydranet_model.state_dict(),  # Model weights
+                'epoch': i,  # Save the current epoch
+                'optimizer_encoder': optimizer_encoder.state_dict(),  # Save encoder optimizer state
+                'optimizer_decoder': optimizer_decoder.state_dict(),  # Save decoder optimizer state
+                'optimizer_sigma_seg': optimizer_sigma_seg.state_dict(),  # Save sigma_seg optimizer state
+                'optimizer_sigma_depth': optimizer_sigma_depth.state_dict(),  # Save sigma_depth optimizer state
+                'optimizer_invhuber': optimizer_invhuber.state_dict(),  # Save decoder optimizer state
+                'optimizer_l1': optimizer_l1.state_dict(),  # Save decoder optimizer state
+                'optimizer_grad': optimizer_grad.state_dict(),  # Save decoder optimizer state
+                'scheduler_encoder': cas_scheduler_enc.__dict__,  # Save encoder scheduler state
+                'scheduler_decoder': cas_scheduler_dec.__dict__,  # Save decoder scheduler state
+                'scheduler_invhuber': cas_scheduler_invhuber.__dict__,  # Save decoder scheduler state
+                'scheduler_l1': cas_scheduler_l1.__dict__,  # Save decoder scheduler state
+                'scheduler_grad': cas_scheduler_grad.__dict__,  # Save decoder scheduler state
+                'scheduler_sigma_seg': cas_scheduler_sigma_seg.__dict__,  # Save sigma_seg scheduler state
+                'scheduler_sigma_depth': cas_scheduler_sigma_depth.__dict__,  # Save sigma_depth scheduler state
+            }
+        else:
+            checkpoint = {
+                'state_dict': hydranet_model.state_dict(),  # Model weights
+                'epoch': i,  # Save the current epoch
+                'optimizer_encoder': optimizer_encoder.state_dict(),  # Save encoder optimizer state
+                'optimizer_decoder': optimizer_decoder.state_dict(),  # Save decoder optimizer state
+                'optimizer_sigma_seg': optimizer_sigma_seg.state_dict(),  # Save sigma_seg optimizer state
+                'optimizer_sigma_depth': optimizer_sigma_depth.state_dict(),  # Save sigma_depth optimizer state
+                'scheduler_encoder': cas_scheduler_enc.__dict__,  # Save encoder scheduler state
+                'scheduler_decoder': cas_scheduler_dec.__dict__,  # Save decoder scheduler state
+                'scheduler_sigma_seg': cas_scheduler_sigma_seg.__dict__,  # Save sigma_seg scheduler state
+                'scheduler_sigma_depth': cas_scheduler_sigma_depth.__dict__,  # Save sigma_depth scheduler state
+            }
+
         base_chkpt_file_name = os.path.basename(args.out_chkpt_file)
         base_metric_file_name = os.path.basename(args.load_metric_file)
         save_ckpt_file = os.path.join(args.output_dir, base_chkpt_file_name)
@@ -685,12 +720,17 @@ for i in range(start_epoch, n_epochs):
         with open(f"{os.path.join(args.output_dir, 'learning_rate_log.txt')}", "a") as f:
             current_lr_enc = optimizer_encoder.param_groups[0]['lr']
             current_lr_dec = optimizer_decoder.param_groups[0]['lr']
-            current_lr_invhuber = optimizer_invhuber.param_groups[0]['lr']
-            current_lr_l1 = optimizer_l1.param_groups[0]['lr']
-            current_lr_grad = optimizer_grad.param_groups[0]['lr']
             current_lr_sigma_seg = optimizer_sigma_seg.param_groups[0]['lr']
             current_lr_sigma_depth = optimizer_sigma_depth.param_groups[0]['lr']
-            f.write(f"Epoch {i}: Encoder LR = {current_lr_enc}, Decoder LR = {current_lr_dec}, Sigma Seg Learning Rate: {current_lr_sigma_seg:.6f}, Sigma Depth Learning Rate: {current_lr_sigma_depth:.6f}, InvHuber LR: {current_lr_invhuber: .6f}, L1 LR: {current_lr_l1}, Grad LR: {current_lr_grad: .6f}\n")
+
+            if args.use_learnw_invhub_l1_grad:
+                current_lr_invhuber = optimizer_invhuber.param_groups[0]['lr']
+                current_lr_l1 = optimizer_l1.param_groups[0]['lr']
+                current_lr_grad = optimizer_grad.param_groups[0]['lr']
+                f.write(f"Epoch {i}: Encoder LR = {current_lr_enc}, Decoder LR = {current_lr_dec}, Sigma Seg Learning Rate: {current_lr_sigma_seg:.6f}, Sigma Depth Learning Rate: {current_lr_sigma_depth:.6f}, InvHuber LR: {current_lr_invhuber: .6f}, L1 LR: {current_lr_l1}, Grad LR: {current_lr_grad: .6f}\n")
+            else:
+                f.write(f"Epoch {i}: Encoder LR = {current_lr_enc}, Decoder LR = {current_lr_dec}, Sigma Seg Learning Rate: {current_lr_sigma_seg:.6f}, Sigma Depth Learning Rate: {current_lr_sigma_depth:.6f}\n")
+
 
 
 
