@@ -446,6 +446,12 @@ elif args.load_init == 0 and args.load_pretrained == 0 and args.load_resume == 0
     print(f"No loading weights, random initialized weights.")
 
 # ================Weight Initialization===================#
+def get_trainable_param_percentage(model):
+    total_params = sum(p.numel() for p in model.parameters())
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    percent = 100.0 * trainable_params / total_params
+    return percent, trainable_params, total_params
+
 if start_epoch is None:
     start_epoch = 0
 
@@ -613,6 +619,8 @@ for i in range(start_epoch, n_epochs):
     # Optional: print info
     if i in [0, 199, 200, 300, 500, 501]:
         print(f"[Epoch {i}] Encoder frozen? {not hydranet_model.layer1[0].weight.requires_grad}")
+        percent, trainable, total = get_trainable_param_percentage(hydranet_model)
+        print(f"Trainable parameters: {trainable}/{total} ({percent:.2f}%)")
 
 
     if i % args.show_lr_freq_epoch == 0:
@@ -655,6 +663,8 @@ for i in range(start_epoch, n_epochs):
         metrics = [MeanIoU(num_classes), RMSE(ignore_val=ignore_depth)]
 
         with torch.no_grad():
+            percent, trainable, total = get_trainable_param_percentage(hydranet_model)
+            print(f"Trainable parameters: {trainable}/{total} ({percent:.2f}%)")
             vals = validate(model=hydranet_model, metrics=metrics, dataloader=valloader, val_losses=val_losses, crits=[crit_segm, crit_depth], loss_coeffs=loss_coeffs, epoch_num=i)
             val_epochs.append(i)
 
