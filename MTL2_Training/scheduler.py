@@ -54,16 +54,13 @@ class CustomScheduler:
         elif self.current_step < self.cos_anneal_stage:
             # Cosine annealing decay
             self.cosine_scheduler.step()
-            scale = 1.0 / (2 ** self.restart_count)
-            scaled_max_lr = self.max_lr * scale
-            self.cosine_scheduler.base_lrs = [scaled_max_lr for _ in self.optimizer.param_groups]
             new_lr = self.cosine_scheduler.get_last_lr()[0]
         elif self.fin_linear_decay:
             # Final decay to stabilize learning
             progress = (self.current_step - self.cos_anneal_stage) / (self.total_steps - self.cos_anneal_stage)
             new_lr = self.fin_mid_lr + (self.final_lr - self.fin_mid_lr) * progress
             self.cosine_scheduler = None  # Stop future calls
-        else:
+        elif not self.restart:
             # Stay at last cosine LR
             if self.cosine_scheduler:
                 new_lr = self.cosine_scheduler.get_last_lr()[0]            
@@ -73,10 +70,17 @@ class CustomScheduler:
             param_group['lr'] = new_lr
 
         # Check if cosine cycle just ended — update cycle length and next phase end
-        if self.restart and self.current_step == self.cos_anneal_stage:
+        if self.restart and self.current_step == self.cos_anneal_stage and not self.fin_linear_decay:
             self.restart_count += 1
             self.current_cycle_len *= self.T_mult
             self.cos_anneal_stage += self.current_cycle_len            
+
+            scale = 1.0 / (2 ** self.restart_count)
+            scaled_max_lr = self.max_lr * scale
+            self.cosine_scheduler.base_lrs = [scaled_max_lr for _ in self.optimizer.param_groups]
+
+            self.cosine_scheduler.step()
+            new_lr = self.cosine_scheduler.get_last_lr()[0]
 
     def state_dict(self):
         return {
