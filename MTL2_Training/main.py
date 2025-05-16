@@ -13,7 +13,7 @@ from torch.utils.data import Dataset
 from utils import Normalise, RandomCrop, ToTensor, RandomMirror, get_param_groups
 import torchvision.transforms as transforms
 import os
-from utils import DepthLoss
+from utils import DepthLoss, InvHuberLoss
 from model_helpers import Saver, load_state_dict
 import operator
 import json
@@ -83,6 +83,7 @@ def get_args_parser():
     parser.add_argument("--cos_anneal_restart", action="store_true", help="Whether restart the cosine annealing scheduling after T_0.")
     parser.add_argument("--use_uncloss_weight", action="store_true", help="Whether to use learnable uncertainty loss weighting (Kendall et al., 2018).")
     parser.add_argument("--use_learnw_invhub_l1_grad", action="store_true", help="Whether to use learnable weighting for weighting between invhuber/L1/grad loss")
+    parser.add_argument("--use_invhuber_only", action="store_true", help="Whether to use InvHuber loss only for depth.")
     parser.add_argument('--weight_decay_enc', default=2e-4, type=float)
     parser.add_argument('--weight_decay_dec', default=1e-4, type=float)
     parser.add_argument('--weight_decay_dec_depthloss', default=1e-4, type=float)
@@ -157,7 +158,10 @@ lambda_grad = torch.nn.Parameter(torch.tensor(0.3), requires_grad=True)
 lambda_l1 = torch.nn.Parameter(torch.tensor(0.4), requires_grad=True)
 
 crit_segm = nn.CrossEntropyLoss(ignore_index=ignore_index)
-crit_depth = DepthLoss(lambda_invhuber=args.invhuber_weight, lambda_l1=args.l1_weight, lambda_grad=args.grad_weight, ignore_index=ignore_index, learnable_weights=args.use_learnw_invhub_l1_grad)
+if args.use_invhuber_only:
+    crit_depth = InvHuberLoss(ignore_index=ignore_depth)
+else:
+    crit_depth = DepthLoss(lambda_invhuber=args.invhuber_weight, lambda_l1=args.l1_weight, lambda_grad=args.grad_weight, ignore_index=ignore_index, learnable_weights=args.use_learnw_invhub_l1_grad)
 
 if args.use_learnw_invhub_l1_grad:
     param_invhuber = [crit_depth.lambda_invhuber]
