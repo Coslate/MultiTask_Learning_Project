@@ -216,7 +216,7 @@ Under folder `baseline_result`:
 
 ## Demo Video
 
-▶️ [![Watch the video](https://imgur.com/a/DZq4csv)](https://youtu.be/UL70NAWl24E)
+▶️ [![Watch the video](figures/out.png)](https://youtu.be/UL70NAWl24E)
 
 ---
 
