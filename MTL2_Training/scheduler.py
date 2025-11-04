@@ -64,6 +64,8 @@ class CustomScheduler:
             # Stay at last cosine LR
             if self.cosine_scheduler:
                 new_lr = self.cosine_scheduler.get_last_lr()[0]            
+            else:
+                new_lr = self.get_last_lr()[0]  # fallback in case all above conditions fail
 
         # Check if cosine cycle just ended — update cycle length and next phase end
         if self.restart and self.current_step == self.cos_anneal_stage and not self.fin_linear_decay:
@@ -74,16 +76,21 @@ class CustomScheduler:
             scale = 1.0 / (2 ** self.restart_count)
             scaled_max_lr = self.max_lr * scale
 
-            # Update the optimizer's base LRs
+            # Update initial_lr for next cycle
             for param_group in self.optimizer.param_groups:
-                param_group['initial_lr'] = scaled_max_lr
-                param_group['lr'] = scaled_max_lr
+                param_group['initial_lr'] = scaled_max_lr  # this affects how get_lr() computes decay
 
-            # Re-instantiate the scheduler from step 0 of the new cycle
+            # Re-instantiate the cosine scheduler from new base LR
             self.cosine_scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
                 self.optimizer, T_0=self.current_cycle_len, T_mult=1, eta_min=self.min_lr
             )
-        else:
+            self.cosine_scheduler.last_epoch = -1  # reset internal state (forces decay from new max)
+            
+        if (
+            self.current_step < self.warmup_steps
+            or (self.fin_linear_decay and self.current_step >= self.cos_anneal_stage)
+            or not self.restart
+        ):
             # Apply new learning rate
             for param_group in self.optimizer.param_groups:
                 param_group['lr'] = new_lr

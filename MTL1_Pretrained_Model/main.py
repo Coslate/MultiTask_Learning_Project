@@ -54,6 +54,7 @@ def get_args_parser():
     parser.add_argument('--out_pretrain_loss_figfile_name', default='./pretrained_loss_fig.png', type=str)
     parser.add_argument('--out_dir', default='./pretrained_output', type=str)
     parser.add_argument("--final_linear_decay", action="store_true", help="Whether to do linear decay after cosin annealing.")
+    parser.add_argument("--cos_anneal_restart", action="store_true", help="Whether restart the cosine annealing scheduling after T_0.")
     return parser    
 
 parser = argparse.ArgumentParser("Singleto3D", parents=[get_args_parser()])
@@ -150,7 +151,7 @@ final_lr_enc = args.cas_final_lr_enc         # Final minimum LR for convergence
 T_0_enc = args.cas_T_0_enc
 T_mult_enc = args.cas_T_mult_enc
 
-cas_scheduler_enc = CustomScheduler(optimizer, warmup_steps_enc, total_steps, min_lr_enc, learning_rate_enc, final_lr_enc, T_0_enc, T_mult_enc, args.final_linear_decay)
+cas_scheduler_enc = CustomScheduler(optimizer, warmup_steps_enc, total_steps, min_lr_enc, learning_rate_enc, final_lr_enc, T_0_enc, T_mult_enc, args.final_linear_decay, args.cos_anneal_restart)
 
 # Pretraining Loop
 n_epochs = args.max_iter if args.early_stop_iter is None else args.early_stop_iter
@@ -204,7 +205,7 @@ for epoch in range(start_epoch, n_epochs+1):
             with torch.no_grad():
                 stds = []
                 for scale_idx, z in enumerate(z_i_list):
-                    std = z.std(dim=0).mean().item()  # std over channel dim
+                    std = z.std(dim=0).mean().item()  # std over batch dim
                     stds.append(std)
                     print(f"Epoch {epoch} | Scale-{scale_idx+1} Feature Std: {std:.6f}")                
                 avg_std = sum(stds) / len(stds)

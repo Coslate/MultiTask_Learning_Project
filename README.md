@@ -214,6 +214,10 @@ Under folder `baseline_result`:
 
 ---
 
+## Demo Video
+
+▶️ [Watch the multi-task learning demo](MTL2_Training/outputs/out.mp4)
+
 ## Notes
 
 - Segmentation: `num_classes=40`
