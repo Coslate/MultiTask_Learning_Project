@@ -218,6 +218,17 @@ Under folder `baseline_result`:
 
 ▶️ [Watch the multi-task learning demo](MTL2_Training/outputs/out.mp4)
 
+<video
+  src="https://github.com/Coslate/MultiTask_Learning_Project/raw/main/MTL2_Training/outputs/out.mp4"
+  controls
+  loop
+  muted
+  playsinline
+  style="max-width: 100%; height: auto;"
+>
+  Your browser does not support the video tag.
+</video>
+
 ## Notes
 
 - Segmentation: `num_classes=40`
