@@ -216,7 +216,7 @@ Under folder `baseline_result`:
 
 ## Demo Video
 
-▶️ ![Multi-task learning demo](https://github.com/user-attachments/assets/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx)
+▶️ ![Multi-task learning demo](https://github.com/user-attachments/assets/45d70c71-3359-441a-b814-e328726bb56c)
 
 ---
 
